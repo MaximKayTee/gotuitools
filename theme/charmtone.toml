@@ -1,0 +1,66 @@
+# charmtone: dark. Helix format.
+
+"ui.background" = { bg = "pepper" }
+"ui.text" = "sash"
+"ui.text.focus" = { fg = "butter", modifiers = ["bold"] }
+"ui.text.inactive" = "squid"
+"ui.selection" = { fg = "butter", bg = "charple" }
+"ui.cursor" = { modifiers = ["reversed"] }
+"ui.statusline" = { fg = "squid", bg = "bbq" }
+"ui.statusline.key" = { fg = "sash", bg = "bbq", modifiers = ["bold"] }
+"ui.window" = "char"
+"ui.window.focus" = "charple"
+"ui.popup" = { fg = "dolly", bg = "bbq", modifiers = ["bold"] }
+"ui.menu" = { fg = "smoke", bg = "bbq" }
+"ui.menu.selected" = { fg = "butter", bg = "charple" }
+
+"error" = "coral"
+"warning" = "mustard"
+"info" = "malibu"
+"hint" = "squid"
+
+"markup.heading" = { fg = "hazy", modifiers = ["bold"] }
+"markup.heading.1" = { fg = "dolly", modifiers = ["bold"] }
+"markup.bold" = { fg = "salt", modifiers = ["bold"] }
+"markup.italic" = { modifiers = ["italic"] }
+"markup.strikethrough" = { fg = "squid", modifiers = ["crossed_out"] }
+"markup.link" = { fg = "malibu", modifiers = ["underlined"] }
+"markup.link.note" = "bok"
+"markup.link.broken" = { fg = "coral", modifiers = ["crossed_out"] }
+"markup.tag" = "dolly"
+"markup.quote" = { fg = "squid", modifiers = ["italic"] }
+"markup.raw" = { fg = "smoke", bg = "bbq" }
+"markup.list" = "oyster"
+"markup.list.checked" = "julep"
+"markup.list.unchecked" = "squid"
+"markup.callout" = { fg = "mustard", modifiers = ["bold"] }
+"markup.table.header" = { fg = "salt", modifiers = ["bold"] }
+"markup.separator" = "iron"
+
+"canvas.header" = { fg = "hazy", modifiers = ["bold"] }
+"canvas.separator" = "iron"
+"canvas.card.focused" = "dolly"
+
+"widget.checkbox" = "bok"
+"widget.date" = "squid"
+"widget.tag" = "dolly"
+
+[palette]
+pepper = "#201f26"
+bbq = "#2d2c36"
+char = "#3a3943"
+iron = "#4d4c57"
+oyster = "#605f6b"
+squid = "#858392"
+smoke = "#bfbcc8"
+sash = "#ecebf0"
+salt = "#f7f6fb"
+butter = "#fffaf1"
+charple = "#6b50ff"
+hazy = "#8b75ff"
+dolly = "#ff60ff"
+malibu = "#00a4ff"
+bok = "#68ffd6"
+julep = "#00ffb2"
+mustard = "#f5ef34"
+coral = "#ff577d"

@@ -1,0 +1,66 @@
+# charmtone-light: charmtone on a light background. Helix format.
+
+"ui.background" = { bg = "pepper" }
+"ui.text" = "sash"
+"ui.text.focus" = { fg = "butter", modifiers = ["bold"] }
+"ui.text.inactive" = "squid"
+"ui.selection" = { fg = "#ffffff", bg = "charple" }
+"ui.cursor" = { modifiers = ["reversed"] }
+"ui.statusline" = { fg = "squid", bg = "bbq" }
+"ui.statusline.key" = { fg = "sash", bg = "bbq", modifiers = ["bold"] }
+"ui.window" = "char"
+"ui.window.focus" = "charple"
+"ui.popup" = { fg = "dolly", bg = "bbq", modifiers = ["bold"] }
+"ui.menu" = { fg = "smoke", bg = "bbq" }
+"ui.menu.selected" = { fg = "#ffffff", bg = "charple" }
+
+"error" = "coral"
+"warning" = "mustard"
+"info" = "malibu"
+"hint" = "squid"
+
+"markup.heading" = { fg = "hazy", modifiers = ["bold"] }
+"markup.heading.1" = { fg = "dolly", modifiers = ["bold"] }
+"markup.bold" = { fg = "salt", modifiers = ["bold"] }
+"markup.italic" = { modifiers = ["italic"] }
+"markup.strikethrough" = { fg = "squid", modifiers = ["crossed_out"] }
+"markup.link" = { fg = "malibu", modifiers = ["underlined"] }
+"markup.link.note" = "bok"
+"markup.link.broken" = { fg = "coral", modifiers = ["crossed_out"] }
+"markup.tag" = "dolly"
+"markup.quote" = { fg = "squid", modifiers = ["italic"] }
+"markup.raw" = { fg = "smoke", bg = "bbq" }
+"markup.list" = "oyster"
+"markup.list.checked" = "julep"
+"markup.list.unchecked" = "squid"
+"markup.callout" = { fg = "mustard", modifiers = ["bold"] }
+"markup.table.header" = { fg = "salt", modifiers = ["bold"] }
+"markup.separator" = "iron"
+
+"canvas.header" = { fg = "hazy", modifiers = ["bold"] }
+"canvas.separator" = "iron"
+"canvas.card.focused" = "dolly"
+
+"widget.checkbox" = "bok"
+"widget.date" = "squid"
+"widget.tag" = "dolly"
+
+[palette]
+pepper = "#f7f6fb"
+bbq = "#ecebf0"
+char = "#d8d6df"
+iron = "#bfbcc8"
+oyster = "#858392"
+squid = "#605f6b"
+smoke = "#3a3943"
+sash = "#2d2c36"
+salt = "#201f26"
+butter = "#1a1920"
+charple = "#6b50ff"
+hazy = "#5b45d6"
+dolly = "#c2189f"
+malibu = "#006fb3"
+bok = "#00866a"
+julep = "#008a5c"
+mustard = "#8a6d00"
+coral = "#d12a55"
