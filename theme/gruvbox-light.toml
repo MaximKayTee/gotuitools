@@ -1,0 +1,14 @@
+# gruvbox-light: Gruvbox, light. A palette of the roles.
+
+[palette]
+text = "#3c3836"
+background = "#fbf1c7"
+surface = "#ebdbb2"
+border = "#d5c4a1"
+muted = "#7c6f64"
+accent = "#af3a03"
+accent2 = "#8f3f71"
+good = "#79740e"
+warning = "#b57614"
+bad = "#9d0006"
+info = "#076678"

@@ -1,0 +1,14 @@
+# tokyonight: Tokyo Night, dark. A palette of the roles.
+
+[palette]
+text = "#c0caf5"
+background = "#1a1b26"
+surface = "#292e42"
+border = "#3b4261"
+muted = "#737aa2"
+accent = "#7aa2f7"
+accent2 = "#bb9af7"
+good = "#9ece6a"
+warning = "#e0af68"
+bad = "#f7768e"
+info = "#7dcfff"

@@ -1,10 +1,8 @@
 package theme
 
 import (
-	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 )
 
@@ -61,23 +59,4 @@ func TestBuiltInContrast(t *testing.T) {
 			t.Errorf("%s selection contrast %.2f", name, r)
 		}
 	}
-}
-
-func contrast(a, b string) float64 {
-	la, lb := luminance(a), luminance(b)
-	return (math.Max(la, lb) + 0.05) / (math.Min(la, lb) + 0.05)
-}
-
-func luminance(hex string) float64 {
-	var c [3]float64
-	for i := range c {
-		v, _ := strconv.ParseUint(hex[1+2*i:3+2*i], 16, 8)
-		s := float64(v) / 255
-		if s <= 0.03928 {
-			c[i] = s / 12.92
-		} else {
-			c[i] = math.Pow((s+0.055)/1.055, 2.4)
-		}
-	}
-	return 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2]
 }

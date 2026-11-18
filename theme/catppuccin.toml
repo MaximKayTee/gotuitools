@@ -1,0 +1,14 @@
+# catppuccin: Catppuccin Mocha, dark. A palette of the roles.
+
+[palette]
+text = "#cdd6f4"
+background = "#1e1e2e"
+surface = "#313244"
+border = "#45475a"
+muted = "#a6adc8"
+accent = "#cba6f7"
+accent2 = "#89b4fa"
+good = "#a6e3a1"
+warning = "#f9e2af"
+bad = "#f38ba8"
+info = "#89dceb"

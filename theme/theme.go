@@ -24,6 +24,7 @@ import (
 type Theme struct {
 	name    string
 	scopes  map[string]Style
+	under   map[string]Style  // the general parts and a program's own, for scopes the theme does not set
 	palette map[string]string // colour names from the theme's [palette]
 }
 
@@ -34,7 +35,7 @@ func (t Theme) Name() string { return t.name }
 // Default is charmtone.
 func Default() Theme { return mustBuiltIn("charmtone") }
 
-//go:embed charmtone.toml charmtone-light.toml terminal.toml
+//go:embed charmtone.toml charmtone-light.toml terminal.toml catppuccin.toml catppuccin-light.toml gruvbox.toml gruvbox-light.toml tokyonight.toml nord.toml dracula.toml
 var builtInFiles embed.FS
 
 var (
@@ -45,7 +46,7 @@ var (
 
 func initBuiltIn() {
 	initOnce.Do(func() {
-		for _, name := range []string{"charmtone", "charmtone-light", "terminal"} {
+		for _, name := range []string{"charmtone", "charmtone-light", "terminal", "catppuccin", "catppuccin-light", "gruvbox", "gruvbox-light", "tokyonight", "nord", "dracula"} {
 			data, err := builtInFiles.ReadFile(name + ".toml")
 			if err != nil {
 				panic(err)
@@ -160,13 +161,14 @@ func FindFor(name string, dark bool, dirs ...string) (Theme, error) {
 }
 
 // Dirs are the theme directories for a program: <config>/<app>/themes,
-// then Helix's themes directory.
+// then <config>/gotuitools/themes, which every program reads, then
+// Helix's themes directory.
 func Dirs(app string) []string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return nil
 	}
-	return []string{filepath.Join(dir, app, "themes"), filepath.Join(dir, "helix", "themes")}
+	return []string{filepath.Join(dir, app, "themes"), filepath.Join(dir, "gotuitools", "themes"), filepath.Join(dir, "helix", "themes")}
 }
 
 // Ground returns the colour of plain text and the colour of the screen
@@ -182,15 +184,27 @@ func (t Theme) Ground() (text, screen color.Color) {
 	return text, screen
 }
 
-// Style returns how the named part of the screen is drawn.
+// Style returns how the named part of the screen is drawn: as the theme
+// says of it or of a scope above it, else as the general parts and the
+// program's own (see Under) say.
 func (t Theme) Style(scope string) Style {
+	if s, ok := nearest(t.scopes, scope); ok {
+		return s
+	}
+	s, _ := nearest(t.under, scope)
+	return s
+}
+
+// nearest is the style of scope, or of the nearest scope above it that
+// has one.
+func nearest(styles map[string]Style, scope string) (Style, bool) {
 	for {
-		if s, ok := t.scopes[scope]; ok {
-			return s
+		if s, ok := styles[scope]; ok {
+			return s, true
 		}
 		i := strings.LastIndexByte(scope, '.')
 		if i < 0 {
-			return Style{}
+			return Style{}, false
 		}
 		scope = scope[:i]
 	}
@@ -202,9 +216,10 @@ func (t Theme) Render(scope, text string) string { return t.Style(scope).Render(
 // Lip is the style of scope as a lipgloss.Style.
 func (t Theme) Lip(scope string) lipgloss.Style { return t.Style(scope).Lip() }
 
-// Colour is the colour named in the theme's palette, or nil.
+// Colour is the colour named in the theme's palette, or the colour of a
+// role (see Roles), or nil.
 func (t Theme) Colour(name string) color.Color {
-	if c, ok := t.palette[name]; ok {
+	if c := t.colours()[name]; c != "" {
 		return lipgloss.Color(c)
 	}
 	return nil
@@ -233,7 +248,7 @@ func (t Theme) Over(scopes map[string]any) (Theme, error) {
 	if err != nil {
 		return Theme{}, err
 	}
-	over := Theme{name: t.name, scopes: make(map[string]Style, len(t.scopes)), palette: t.palette}
+	over := Theme{name: t.name, scopes: make(map[string]Style, len(t.scopes)), under: t.under, palette: t.palette}
 	maps.Copy(over.scopes, t.scopes)
 	for scope, s := range styles {
 		over.scopes[scope] = s.Over(over.scopes[scope])
@@ -306,14 +321,20 @@ func build(files []themeFile) (Theme, error) {
 		}
 		maps.Copy(t.scopes, styles)
 	}
+	under, err := t.styles(base())
+	if err != nil {
+		return Theme{}, fmt.Errorf("base.toml: %w", err)
+	}
+	t.under = under
 	return t, nil
 }
 
-// styles reads each scope's value with the theme's palette.
+// styles reads each scope's value with the theme's palette and its roles.
 func (t Theme) styles(values map[string]any) (map[string]Style, error) {
 	styles := make(map[string]Style, len(values))
+	colours := t.colours()
 	for _, scope := range slices.Sorted(maps.Keys(values)) {
-		s, err := style(values[scope], t.palette)
+		s, err := style(values[scope], colours)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", scope, err)
 		}

@@ -1,0 +1,14 @@
+# gruvbox: Gruvbox, dark. A palette of the roles.
+
+[palette]
+text = "#ebdbb2"
+background = "#282828"
+surface = "#3c3836"
+border = "#504945"
+muted = "#a89984"
+accent = "#fe8019"
+accent2 = "#d3869b"
+good = "#b8bb26"
+warning = "#fabd2f"
+bad = "#fb4934"
+info = "#83a598"

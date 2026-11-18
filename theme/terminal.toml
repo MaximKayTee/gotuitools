@@ -40,3 +40,11 @@
 "widget.checkbox" = { modifiers = ["bold"] }
 "widget.date" = { modifiers = ["dim"] }
 "widget.tag" = "magenta"
+
+[palette]
+accent = "blue"
+accent2 = "magenta"
+good = "green"
+warning = "yellow"
+bad = "red"
+info = "cyan"

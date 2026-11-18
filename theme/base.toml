@@ -1,0 +1,30 @@
+# The general parts of a screen, drawn from a theme's roles. These lie
+# under every theme: what a theme says of a part, or of one above it, stands.
+
+"ui.background" = { bg = "background" }
+"ui.text" = "text"
+"ui.text.focus" = { fg = "text", modifiers = ["bold"] }
+"ui.text.inactive" = "muted"
+"ui.selection" = { fg = "onaccent", bg = "accent" }
+"ui.cursor" = { modifiers = ["reversed"] }
+"ui.statusline" = { fg = "muted", bg = "surface" }
+"ui.statusline.key" = { fg = "text", bg = "surface", modifiers = ["bold"] }
+"ui.window" = "border"
+"ui.window.focus" = "accent"
+"ui.popup" = { fg = "accent2", bg = "surface", modifiers = ["bold"] }
+"ui.menu" = { fg = "text", bg = "surface" }
+"ui.menu.selected" = { fg = "onaccent", bg = "accent" }
+
+"error" = "bad"
+"warning" = "warning"
+"info" = "info"
+"hint" = "muted"
+
+"markup.heading" = { fg = "accent", modifiers = ["bold"] }
+"markup.bold" = { modifiers = ["bold"] }
+"markup.italic" = { modifiers = ["italic"] }
+"markup.strikethrough" = { fg = "muted", modifiers = ["crossed_out"] }
+"markup.link" = { fg = "info", modifiers = ["underlined"] }
+"markup.quote" = { fg = "muted", modifiers = ["italic"] }
+"markup.raw" = { bg = "surface" }
+"markup.list" = "muted"

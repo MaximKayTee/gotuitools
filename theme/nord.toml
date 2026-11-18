@@ -1,0 +1,14 @@
+# nord: Nord, dark. A palette of the roles.
+
+[palette]
+text = "#d8dee9"
+background = "#2e3440"
+surface = "#3b4252"
+border = "#4c566a"
+muted = "#7b88a1"
+accent = "#88c0d0"
+accent2 = "#b48ead"
+good = "#a3be8c"
+warning = "#ebcb8b"
+bad = "#bf616a"
+info = "#81a1c1"

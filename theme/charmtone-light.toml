@@ -46,6 +46,18 @@
 "widget.tag" = "dolly"
 
 [palette]
+text = "#2d2c36"
+background = "#f7f6fb"
+surface = "#ecebf0"
+border = "#d8d6df"
+muted = "#605f6b"
+accent = "#6b50ff"
+accent2 = "#c2189f"
+good = "#008a5c"
+warning = "#8a6d00"
+bad = "#d12a55"
+info = "#006fb3"
+
 pepper = "#f7f6fb"
 bbq = "#ecebf0"
 char = "#d8d6df"
