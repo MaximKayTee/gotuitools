@@ -35,6 +35,7 @@ One tab per component: theme, text, input, list, fuzzy, modal and palette, layou
 | `fuzzy` | Ranked search: tiers by field, then subsequence |
 | `command` | Command registry, key bindings by mode, chords, user rebinding, dispatcher |
 | `palette` | Command palette and any chooser: a modal |
+| `form` | Modal of fields to fill in: text lines and choices, a check before submit |
 | `help` | Status-bar hints, keys screen, KEYS.md render and check |
 | `modal` | Component and Modal contract, modal stack with message routing, `Frame`, overlays |
 | `layout` | Rects, mouse zones, dividers, pointer shapes, "Window too small", resize settle |
