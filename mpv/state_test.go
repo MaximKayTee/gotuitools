@@ -97,3 +97,45 @@ func TestOptionList(t *testing.T) {
 		t.Fatalf("volume %q", v)
 	}
 }
+
+func TestStateApplyObserved(t *testing.T) {
+	s := mpvState{extra: []string{"metadata/by-key/icy-title", "audio-codec-name"}}
+	ev := func(i int, format int, str string) mpvEvent {
+		return mpvEvent{id: evPropertyChange, prop: propExtra + propID(i), format: format, str: str}
+	}
+	if !s.apply(ev(0, fmtString, "A - B")) || !s.apply(ev(1, fmtString, "mp3")) {
+		t.Fatal("no change reported")
+	}
+	first := s.status().Props
+	if first["metadata/by-key/icy-title"] != "A - B" || first["audio-codec-name"] != "mp3" {
+		t.Fatalf("props %v", first)
+	}
+	if s.apply(ev(0, fmtString, "A - B")) {
+		t.Error("same value reported as a change")
+	}
+	if !s.apply(ev(0, fmtString, "C - D\xff")) {
+		t.Fatal("new value not reported")
+	}
+	if got := s.status().Props["metadata/by-key/icy-title"]; got != "C - D" {
+		t.Errorf("title %q", got)
+	}
+	if first["metadata/by-key/icy-title"] != "A - B" {
+		t.Error("a Status handed out changed")
+	}
+	if !s.apply(ev(0, fmtNone, "")) {
+		t.Fatal("unset not reported")
+	}
+	if _, ok := s.status().Props["metadata/by-key/icy-title"]; ok {
+		t.Error("unset property kept")
+	}
+	if s.apply(ev(2, fmtString, "x")) || s.apply(ev(0, fmtNone, "")) {
+		t.Error("unknown or unchanged property reported")
+	}
+}
+
+func TestExtraOptionsLast(t *testing.T) {
+	o := optionList(Source{URL: "http://x/f"}, Options{Extra: [][2]string{{"vid", "no"}}})
+	if last := o[len(o)-1]; last != [2]string{"vid", "no"} {
+		t.Errorf("last option %v", last)
+	}
+}

@@ -116,6 +116,36 @@ func AppendDisplayRGB(dst []byte, id, pid uint32, col, row, cols, rows, w, h int
 	return append(dst, "\x1b8"...)
 }
 
+// AppendDisplayShm appends a transmit-and-display (a=T) of a w x h
+// RGBA image read from the POSIX shared memory object name (t=s), at
+// the cell and scaled as AppendDisplayRGB. The object holds w*h*4
+// bytes, rows top down, straight alpha; the terminal unlinks it after
+// reading. Same machine as the terminal only.
+//
+// Keys in order: a=T,f=32,s,v,t=s,i,p,c,r,C=1,q=2; the payload is the
+// name in base64. w or h <= 0, or no name: dst unchanged.
+func AppendDisplayShm(dst []byte, id, pid uint32, col, row, cols, rows, w, h int, name string) []byte {
+	if w <= 0 || h <= 0 || name == "" {
+		return dst
+	}
+	dst = append(dst, "\x1b7\x1b["...)
+	dst = strconv.AppendInt(dst, int64(max(row, 0)+1), 10)
+	dst = append(dst, ';')
+	dst = strconv.AppendInt(dst, int64(max(col, 0)+1), 10)
+	dst = append(dst, 'H')
+	dst = append(dst, apcStart...)
+	dst = strconv.AppendInt(append(dst, "a=T,f=32,s="...), int64(w), 10)
+	dst = strconv.AppendInt(append(dst, ",v="...), int64(h), 10)
+	dst = strconv.AppendUint(append(dst, ",t=s,i="...), uint64(id), 10)
+	dst = strconv.AppendUint(append(dst, ",p="...), uint64(pid), 10)
+	dst = strconv.AppendInt(append(dst, ",c="...), int64(max(cols, 0)), 10)
+	dst = strconv.AppendInt(append(dst, ",r="...), int64(max(rows, 0)), 10)
+	dst = append(dst, ",C=1,q=2;"...)
+	dst = base64.StdEncoding.AppendEncode(dst, []byte(name))
+	dst = append(dst, apcEnd...)
+	return append(dst, "\x1b8"...)
+}
+
 // rgbKeys appends a=<action>,f=24,s=w,v=h[,o=z],t=d.
 func rgbKeys(b []byte, action byte, w, h int, compressed bool) []byte {
 	b = append(b, 'a', '=', action)

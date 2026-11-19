@@ -85,7 +85,7 @@ typedef struct {
 	uint64_t userdata;
 	double d;
 	int64_t i;
-	char str[64];
+	char str[512];
 	char errmsg[96];
 } tm_event;
 
@@ -309,6 +309,11 @@ func New(src Source, o Options) (*Player, error) {
 		C.tm_observe(h, C.uint64_t(p.id), n, C.int(p.format))
 		C.free(unsafe.Pointer(n))
 	}
+	for i, name := range o.Observe {
+		n := C.CString(name)
+		C.tm_observe(h, C.uint64_t(uint64(propExtra)+uint64(i)), n, C.int(fmtString))
+		C.free(unsafe.Pointer(n))
+	}
 	sig := C.tm_signal_new()
 	var rctx *C.mpv_render_context
 	if r := C.tm_render_create(&rctx, h, sig); r < 0 {
@@ -320,7 +325,7 @@ func New(src Source, o Options) (*Player, error) {
 		latest: -1, shown: -1,
 		stop: make(chan struct{}), renderDone: make(chan struct{}), eventDone: make(chan struct{}), done: make(chan struct{}),
 	}
-	p.st = mpvState{paused: o.Paused, volume: o.Volume, mute: o.Mute, speed: 1, loop: o.Loop}
+	p.st = mpvState{paused: o.Paused, volume: o.Volume, mute: o.Mute, speed: 1, loop: o.Loop, extra: o.Observe}
 	go p.eventLoop()
 	go p.renderLoop()
 	if err := p.command(false, "loadfile", src.target()); err != nil {

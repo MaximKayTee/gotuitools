@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -257,4 +258,45 @@ func TestCloseAfterControls(t *testing.T) {
 	p.SeekBy(time.Second)
 	p.Redraw()
 	p.Close()
+}
+
+// TestObservesTags plays a tagged tone, no video: the observed
+// properties arrive as Status.Props.
+func TestObservesTags(t *testing.T) {
+	if err := Available(); err != nil {
+		t.Skip(err)
+	}
+	ff, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	title := strings.Repeat("Long title ", 12) + "end"
+	out := filepath.Join(t.TempDir(), "tone.ogg")
+	cmd := exec.Command(ff, "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:a", "flac",
+		"-metadata", "title="+title, "-metadata", "artist=Tester", "-y", out)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg: %v %s", err, b)
+	}
+	p, err := New(Source{Path: out}, Options{AudioOutput: "null", Paused: true,
+		Observe: []string{"metadata/by-key/title", "metadata/by-key/artist", "audio-codec-name", "audio-params/samplerate", "metadata/by-key/none"},
+		Extra:   [][2]string{{"vid", "no"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeWait(t, p)
+	waitFor(t, "tags", func() bool {
+		pr := p.Status().Props
+		return pr["metadata/by-key/title"] != "" && pr["audio-params/samplerate"] != ""
+	})
+	pr := p.Status().Props
+	if pr["metadata/by-key/title"] != title || pr["metadata/by-key/artist"] != "Tester" {
+		t.Errorf("tags %q", pr)
+	}
+	if pr["audio-codec-name"] != "flac" || pr["audio-params/samplerate"] != "44100" {
+		t.Errorf("audio %q", pr)
+	}
+	if _, ok := pr["metadata/by-key/none"]; ok {
+		t.Errorf("absent tag has a value: %q", pr)
+	}
 }

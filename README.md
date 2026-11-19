@@ -5,22 +5,30 @@ Shared packages for the Bubble Tea v2 programs in `~/Projects/Current`.
 ## Use
 
 ```
-require github.com/MaximKayTee/gotuitools v0.0.0
-replace github.com/MaximKayTee/gotuitools => ../gotuitools
+go get github.com/MaximKayTee/gotuitools@main
 ```
 
 `go doc github.com/MaximKayTee/gotuitools/<package>` for each API.
+
+## Demo
+
+```
+go run github.com/MaximKayTee/gotuitools/cmd/gotuitools-demo@main
+```
+
+One tab per component: theme, text, input, list, fuzzy, modal and palette, layout, keys, settings, images. Not covered: `mpv`, `player`. Settings in `<UserConfigDir>/gotuitools-demo/config.toml`.
 
 ## Packages
 
 | Package | What |
 |---|---|
 | `kitty` | Kitty graphics escapes: transmit, unicode placeholders, placements, cell pixel size |
-| `termimg` | Encoder seam (`Kitty`, `Blank`), out-of-band `Queue`, decode, `Normalize`, resize and `Pack`, `Fit` to cells, `LRU`, `IDs`, `Circle`, `Cover` |
+| `termimg` | Encoder seam (`Kitty`, `Blocks` half blocks, `Blank`; `Choose` by mode), out-of-band `Queue`, decode, `Normalize`, resize and `Pack`, `Fit` to cells, `LRU`, `IDs`, `Circle`, `Cover` |
 | `termout` | One serialised terminal writer for Bubble Tea and image queues; holds output until the alt screen |
-| `mpv` | libmpv by dlopen, software-rendered frames |
-| `player` | Video with sound in a cell rect: mpv frames as kitty images, controls, state; the frame `Sink` |
-| `theme` | Helix-format themes, scopes with fallback; built in: charmtone, charmtone-light, terminal; `Register` a program's own |
+| `mpv` | libmpv by dlopen, software-rendered frames; more properties followed as strings (`Observe`), more options (`Extra`) |
+| `player` | Video with sound in a cell rect: mpv frames as kitty images, through shared memory with `Shm`, controls, state; the frame `Sink` |
+| `pics` | Fetched pictures by key in boxes of cells: cut by kind (`Circle` icons, `Whole` covers), placed, freed when no longer drawn |
+| `theme` | Helix-format themes, scopes with fallback; built in: charmtone, charmtone-light, terminal, catppuccin, catppuccin-light, gruvbox, gruvbox-light, tokyonight, nord, dracula; `Register` a program's own. A theme in `<UserConfigDir>/gotuitools/themes` is found by every program and can be a palette of eleven roles; a program lays its own parts under any theme with `Under` |
 | `text` | Widths, fit, truncate, wrap, rows, columns; bytes, durations, clocks, relative times, counts |
 | `input` | One-line editor with word motions, paste, mask |
 | `list` | Cursor list, variable-height scroller, scroll thumb |
@@ -32,7 +40,7 @@ replace github.com/MaximKayTee/gotuitools => ../gotuitools
 | `layout` | Rects, mouse zones, dividers, pointer shapes, "Window too small", resize settle |
 | `settings` | One TOML file with every setting, declared as a tagged struct; typed values, bounds, enums, checks, atomic writes, reload; `[keys]` as one setting per command; layers (`Over`) |
 | `settingsui` | Settings screen over a `settings.Source`: search, typed editors, saves each change |
-| `sys` | Clipboard (OSC 52, wl-copy, xclip), paste, xdg-open, editor launch at a line, detach |
+| `sys` | Clipboard (OSC 52, wl-copy, xclip), paste, desktop notification (OSC 99), xdg-open, editor launch at a line, detach |
 
 ## Conventions
 

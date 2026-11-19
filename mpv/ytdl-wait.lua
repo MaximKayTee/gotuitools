@@ -1,10 +1,11 @@
--- YouTube stream URLs 403 until up to ~5 s after extraction (yt-dlp
+-- YouTube stream URLs 403 until 5 to 6 s after extraction (yt-dlp
 -- "available_at"). ytdl_hook ignores it; hold the load until the first
 -- stream URL answers a range request, probed with curl twice a second,
--- WAIT seconds from the start of the load at most. Without curl: WAIT.
-local WAIT = 6
+-- WAIT seconds from the end of the extraction at most. Without curl:
+-- WAIT.
+local WAIT = 8
 local EVERY = 0.5
-local started
+local youtube
 
 -- fixed upstream after 0.41 (mpv PR #18193); inert on newer builds
 local maj, min = mp.get_property("mpv-version", ""):match("v(%d+)%.(%d+)")
@@ -24,15 +25,15 @@ local function first_url(s)
     return s:match("^https?://[^;]+")
 end
 
+-- before ytdl_hook replaces the name
 mp.add_hook("on_load", 5, function()
-    started = is_yt(mp.get_property("stream-open-filename", "")) and mp.get_time() or nil
+    youtube = is_yt(mp.get_property("stream-open-filename", "")) ~= nil
 end)
 
 mp.add_hook("on_load", 50, function(hook)
-    if not started then return end
-    local deadline = started + WAIT
-    started = nil
-    if mp.get_time() >= deadline then return end
+    if not youtube then return end
+    youtube = false
+    local deadline = mp.get_time() + WAIT
     local url = first_url(mp.get_property("stream-open-filename", ""))
     mp.msg.verbose("probing", url and url:sub(1, 60) or "nothing: no URL")
     hook:defer()

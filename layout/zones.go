@@ -13,6 +13,10 @@ type Zone struct {
 	Wheel   func(d int) tea.Cmd // -1 up, 1 down
 	Middle  func(x, y int) tea.Cmd
 	Right   func(x, y int) tea.Cmd
+	// Hover follows the pointer over the zone, no drag in progress;
+	// Leave runs once it is off the zone.
+	Hover func(x, y int) tea.Cmd
+	Leave func() tea.Cmd
 	// Pointer is the shape over the zone: PointerColumn on a divider.
 	Pointer string
 }
@@ -22,6 +26,7 @@ type Zone struct {
 type Zones struct {
 	list    []Zone
 	drag    *Zone
+	hover   *Zone
 	pointer string
 	// Back and Forward run on the mouse's back and forward buttons.
 	Back, Forward func() tea.Cmd
@@ -53,7 +58,8 @@ func (z *Zones) At(x, y int, ok func(*Zone) bool) *Zone {
 func (z *Zones) Dragging() bool { return z.drag != nil }
 
 // Update handles mouse messages: handled is false for anything else
-// and for mouse input no zone took.
+// and for mouse input no zone took. A motion is handled when a Hover
+// or a Leave ran.
 func (z *Zones) Update(msg tea.Msg) (cmd tea.Cmd, handled bool) {
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
@@ -95,14 +101,29 @@ func (z *Zones) Update(msg tea.Msg) (cmd tea.Cmd, handled bool) {
 		if z.drag != nil {
 			return z.drag.Drag(msg.X, msg.Y), true
 		}
+		var cmds []tea.Cmd
 		shape := ""
 		if hit := z.At(msg.X, msg.Y, func(z *Zone) bool { return z.Pointer != "" }); hit != nil {
 			shape = hit.Pointer
 		}
 		if shape != z.pointer {
 			z.pointer = shape
-			return tea.Raw(SetPointer(shape)), false
+			cmds = append(cmds, tea.Raw(SetPointer(shape)))
 		}
+		hit := z.At(msg.X, msg.Y, func(z *Zone) bool { return z.Hover != nil })
+		handled := false
+		if was := z.hover; was != nil && (hit == nil || hit.Rect != was.Rect) {
+			z.hover, handled = nil, true
+			if was.Leave != nil {
+				cmds = append(cmds, was.Leave())
+			}
+		}
+		if hit != nil {
+			h := *hit
+			z.hover, handled = &h, true
+			cmds = append(cmds, hit.Hover(msg.X, msg.Y))
+		}
+		return tea.Batch(cmds...), handled
 	case tea.MouseReleaseMsg:
 		if d := z.drag; d != nil {
 			z.drag = nil

@@ -1,5 +1,5 @@
-// Package termimg is terminal image plumbing over kitty graphics: the
-// encoder seam, the out-of-band writer, decoding and normalising,
+// Package termimg is terminal image plumbing: the encoder seam (kitty
+// graphics, half blocks, none), the out-of-band writer, decoding and normalising,
 // resizing and packing, fitting to cells, an LRU and image ids.
 package termimg
 
@@ -64,6 +64,27 @@ func (Kitty) PlaceholderRow(id, pid uint32, row, cols int) string {
 	return kitty.PlaceholderRow(id, pid, row, cols)
 }
 func (Kitty) Delete(id uint32) string { return kitty.Delete(id) }
+
+// Modes are the picture modes Choose takes, for a setting's enum.
+var Modes = []string{"auto", "kitty", "blocks", "none"}
+
+// Choose is the encoder for a mode and the mode it resolves to: auto is
+// kitty when kittyOK (kitty.Supported), else blocks; an unknown mode is
+// auto. A new Blocks each call.
+func Choose(mode string, kittyOK bool) (Encoder, string) {
+	switch mode {
+	case "kitty":
+		return Kitty{}, mode
+	case "blocks":
+		return NewBlocks(), mode
+	case "none":
+		return Blank{}, mode
+	}
+	if kittyOK {
+		return Kitty{}, "kitty"
+	}
+	return NewBlocks(), "blocks"
+}
 
 // Default is the encoder components use unless given one: Blank until
 // a program sets it, Kitty when kitty.Supported.

@@ -1,5 +1,5 @@
-// Package sys reaches outside the terminal: the clipboard, other
-// programs, the user's editor.
+// Package sys reaches outside the terminal: the clipboard, desktop
+// notifications, other programs, the user's editor.
 package sys
 
 import (
@@ -24,6 +24,32 @@ import (
 func OSC52(text string) string {
 	return "\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte(text)) + "\x1b\\"
 }
+
+// Notification is the desktop notification sequence (OSC 99, kitty's)
+// for title with body under it, "" none. app names the program: a
+// later notification of the same app replaces the one shown. Text is
+// base64, so any is safe.
+func Notification(app, title, body string) string {
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	id := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			return r
+		}
+		return -1
+	}, app)
+	meta := "e=1"
+	if id != "" {
+		meta = "i=" + id + ":e=1:f=" + b64(app)
+	}
+	if body == "" {
+		return "\x1b]99;" + meta + ";" + b64(title) + "\x1b\\"
+	}
+	return "\x1b]99;" + meta + ":d=0;" + b64(title) + "\x1b\\" +
+		"\x1b]99;" + meta + ":d=1:p=body;" + b64(body) + "\x1b\\"
+}
+
+// Notify shows a desktop notification through the terminal.
+func Notify(app, title, body string) tea.Cmd { return tea.Raw(Notification(app, title, body)) }
 
 // Copy sets the clipboard to text through the terminal (OSC 52).
 func Copy(text string) tea.Cmd { return tea.SetClipboard(text) }

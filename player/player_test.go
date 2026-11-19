@@ -384,13 +384,13 @@ func TestSourceToMPV(t *testing.T) {
 	ctx := context.Background()
 	closes := 0
 	src := Source{Key: "https://youtu.be/x", Target: "https://cdn/x.mp4", Headers: []string{"Referer: r"},
-		Start: 42 * time.Second, Close: func() { closes++ }}
+		Start: 42 * time.Second, Paused: true, Close: func() { closes++ }}
 	if err := p.Play(ctx, src, 0, 0, 40, 12); err != nil {
 		t.Fatal(err)
 	}
 	f := op.last(t)
 	if f.src.URL != "https://cdn/x.mp4" || f.src.Path != "" || !slices.Equal(f.src.Headers, src.Headers) ||
-		!f.o.YTDL || f.o.YTDLFormat != "best" || f.o.Start != 42*time.Second || f.o.Speed != 1 {
+		!f.o.YTDL || f.o.YTDLFormat != "best" || f.o.Start != 42*time.Second || f.o.Speed != 1 || !f.o.Paused {
 		t.Fatalf("opened %+v %+v", f.src, f.o)
 	}
 	if p.Target() != "https://youtu.be/x" || p.State().Target != "https://youtu.be/x" {

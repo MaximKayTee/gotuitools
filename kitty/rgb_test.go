@@ -242,3 +242,20 @@ func TestTransmitRGBA(t *testing.T) {
 		t.Fatal("short pixels")
 	}
 }
+
+func TestAppendDisplayShm(t *testing.T) {
+	got := string(AppendDisplayShm([]byte("x"), 9, 1, 4, 2, 40, 12, 400, 240, "/frame-1"))
+	want := "x\x1b7\x1b[3;5H\x1b_Ga=T,f=32,s=400,v=240,t=s,i=9,p=1,c=40,r=12,C=1,q=2;L2ZyYW1lLTE=\x1b\\\x1b8"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	for _, b := range [][]byte{
+		AppendDisplayShm(nil, 9, 1, 0, 0, 1, 1, 0, 1, "/n"),
+		AppendDisplayShm(nil, 9, 1, 0, 0, 1, 1, 1, 0, "/n"),
+		AppendDisplayShm(nil, 9, 1, 0, 0, 1, 1, 1, 1, ""),
+	} {
+		if len(b) != 0 {
+			t.Errorf("no image wrote %q", b)
+		}
+	}
+}

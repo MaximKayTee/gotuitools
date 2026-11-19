@@ -81,6 +81,12 @@ type Options struct {
 	// OnChange runs on the event goroutine after a property change;
 	// time-pos at most every 100 ms.
 	OnChange func()
+	// Observe names more mpv properties to follow, as strings:
+	// "metadata/by-key/icy-title", "audio-codec-name". Their values are
+	// Status.Props.
+	Observe []string
+	// Extra are more mpv options, set after the others: {"vid", "no"}.
+	Extra [][2]string
 }
 
 // Status is the cached player state.
@@ -101,6 +107,9 @@ type Status struct {
 	Size image.Point
 	// Err: the file failed to play.
 	Err error
+	// Props are the Options.Observe properties that have a value, by
+	// name. Not to be changed.
+	Props map[string]string
 }
 
 // Playing reports a loaded file running: not paused, not at the end.
@@ -158,6 +167,8 @@ const (
 	propDWidth
 	propDHeight
 	propEOF
+	// propExtra and up: Options.Observe, in order.
+	propExtra propID = 1000
 )
 
 var observed = []struct {
@@ -204,6 +215,10 @@ type mpvState struct {
 	w, h   int
 	eof    bool
 	err    error
+	// extra names the Options.Observe properties; props holds their
+	// values, replaced whole on a change.
+	extra []string
+	props map[string]string
 }
 
 // apply folds an event in; it reports a visible change.
@@ -251,8 +266,34 @@ func (s *mpvState) apply(e mpvEvent) bool {
 	case propEOF:
 		s.eof = e.flag
 	default:
+		return s.applyExtra(e)
+	}
+	return true
+}
+
+// applyExtra folds an Options.Observe property in: a copy of props with
+// the value set, or without it when the property has none.
+func (s *mpvState) applyExtra(e mpvEvent) bool {
+	i := int(e.prop) - int(propExtra)
+	if e.prop < propExtra || i >= len(s.extra) {
 		return false
 	}
+	name, val := s.extra[i], strings.ToValidUTF8(e.str, "")
+	old, had := s.props[name]
+	has := e.format == fmtString
+	if has == had && val == old {
+		return false
+	}
+	props := make(map[string]string, len(s.props)+1)
+	for k, v := range s.props {
+		props[k] = v
+	}
+	if has {
+		props[name] = val
+	} else {
+		delete(props, name)
+	}
+	s.props = props
 	return true
 }
 
@@ -268,6 +309,7 @@ func (s *mpvState) status() Status {
 		Loop:   s.loop,
 		EOF:    s.eof,
 		Err:    s.err,
+		Props:  s.props,
 	}
 	if s.w > 0 && s.h > 0 {
 		st.Size = image.Pt(s.w, s.h)
@@ -364,5 +406,5 @@ func optionList(src Source, o Options) [][2]string {
 			opts = append(opts, [2]string{"http-header-fields", strings.Join(fields, ",")})
 		}
 	}
-	return opts
+	return append(opts, o.Extra...)
 }

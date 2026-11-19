@@ -59,3 +59,17 @@ func TestOpenMissing(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestNotification(t *testing.T) {
+	for _, tc := range []struct{ app, title, body, want string }{
+		{"gotube", "Copied", "", "\x1b]99;i=gotube:e=1:f=Z290dWJl;Q29waWVk\x1b\\"},
+		{"gotube", "Subscribed", "A; B\x1b", "\x1b]99;i=gotube:e=1:f=Z290dWJl:d=0;U3Vic2NyaWJlZA==\x1b\\" +
+			"\x1b]99;i=gotube:e=1:f=Z290dWJl:d=1:p=body;QTsgQhs=\x1b\\"},
+		{"", "Done", "", "\x1b]99;e=1;RG9uZQ==\x1b\\"},
+		{"my app:1", "Done", "", "\x1b]99;i=myapp1:e=1:f=bXkgYXBwOjE=;RG9uZQ==\x1b\\"},
+	} {
+		if got := Notification(tc.app, tc.title, tc.body); got != tc.want {
+			t.Errorf("Notification(%q, %q, %q) = %q, want %q", tc.app, tc.title, tc.body, got, tc.want)
+		}
+	}
+}

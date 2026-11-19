@@ -11,6 +11,11 @@
 // rescale. A source smaller than its cells is rendered at its own size
 // and kitty scales it.
 //
+// Options.Shm: each frame is a POSIX shared memory object the terminal
+// reads (kitty t=s), 32-bit, no zlib, no base64: a terminal on this
+// machine. The first frames left unread for a second: frames as above
+// from then on.
+//
 // Pacing: mpv's frame callback wakes one writer goroutine per session;
 // it sends the newest frame, at most MaxFPS a second, start to start.
 // Frames rendered while a write is in progress are dropped but the
@@ -43,6 +48,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MaximKayTee/gotuitools/mpv"
@@ -55,6 +61,10 @@ const DefaultImageID uint32 = 0xFFFFFE
 const MaxVolume = mpv.MaxVolume
 
 const changeEvery = 250 * time.Millisecond
+
+// shmRetry is the wait before a frame the terminal was not ready for
+// is tried again.
+const shmRetry = 4 * time.Millisecond
 
 // ErrNotPlaying: a control without a running session.
 var ErrNotPlaying = errors.New("player: not playing")
@@ -77,11 +87,14 @@ type Options struct {
 	// YTDL: URLs resolve through mpv's ytdl_hook, YTDLFormat its format.
 	YTDL       bool
 	YTDLFormat string
-	Logger     *slog.Logger // discard
+	// Shm: frames through shared memory while the terminal reads them.
+	Shm    bool
+	Logger *slog.Logger // discard
 
-	open  func(mpv.Source, mpv.Options) (engine, error) // tests; mpv.New
-	every time.Duration                                 // tests: Changes interval; changeEvery
-	raw   bool                                          // tests: no zlib
+	open    func(mpv.Source, mpv.Options) (engine, error) // tests; mpv.New
+	every   time.Duration                                 // tests: Changes interval; changeEvery
+	raw     bool                                          // tests: no zlib
+	shmWait time.Duration                                 // tests; shmWait
 }
 
 // engine is the libmpv player as the pane uses it; *mpv.Player.
@@ -136,6 +149,8 @@ type Source struct {
 	Format string
 	// Start is the position playback starts at.
 	Start time.Duration
+	// Paused: playback starts paused, the frame at Start shown.
+	Paused bool
 	// Close runs once when the session ends: a pipe's producer.
 	Close func()
 }
@@ -167,6 +182,8 @@ type Pane struct {
 	mute  bool
 	loop  bool
 	speed float64
+
+	shm atomic.Bool // frames through shared memory
 
 	wg sync.WaitGroup // handles closing
 
@@ -227,7 +244,9 @@ func New(o Options) *Pane {
 	if o.every <= 0 {
 		o.every = changeEvery
 	}
-	return &Pane{o: o, vol: o.Volume, mute: o.Mute, loop: o.Loop, speed: 1, ch: make(chan State, 1)}
+	p := &Pane{o: o, vol: o.Volume, mute: o.Mute, loop: o.Loop, speed: 1, ch: make(chan State, 1)}
+	p.shm.Store(o.Shm)
+	return p
 }
 
 // Play plays src in the rect at 0-based cell (col, row), cols x rows
@@ -272,10 +291,13 @@ func (p *Pane) Play(ctx context.Context, src Source, col, row, cols, rows int) e
 	s := &session{key: key, src: src, cols: cols, rows: rows, done: make(chan struct{}),
 		wake: make(chan struct{}, 1), quit: make(chan struct{}),
 		sink: NewSink(p.o.Output, p.o.ImageID, col, row, p.o.raw)}
+	if p.o.shmWait > 0 {
+		s.sink.wait = p.o.shmWait
+	}
 	vol, mute, loop, speed := p.vol, p.mute, p.loop, p.speed
 	p.mu.Unlock()
 	eng, err := p.o.open(mpvSource(src), mpv.Options{
-		Loop: loop, Speed: speed, Mute: mute, Volume: float64(vol), AudioOutput: p.o.AudioOutput,
+		Loop: loop, Speed: speed, Mute: mute, Paused: src.Paused, Volume: float64(vol), AudioOutput: p.o.AudioOutput,
 		YTDL: p.o.YTDL, YTDLFormat: cmp.Or(src.Format, p.o.YTDLFormat), Start: src.Start,
 		Size:     s.size(p.o.CellPx),
 		OnFrame:  s.poke,
@@ -406,9 +428,34 @@ func (p *Pane) write(s *session, eng engine, log *slog.Logger) {
 		if g.W != img.Rect.Dx() || g.H != img.Rect.Dy() {
 			continue // an older size; the new one is on its way
 		}
-		rgb = toRGB(rgb, img)
-		if !s.sink.Frame(rgb, g) {
-			return
+		sent := false
+		if p.shm.Load() {
+			switch s.sink.frameShm(img, g) {
+			case shmStopped:
+				return
+			case shmBusy:
+				// the newest frame again once the terminal has read
+				t := time.NewTimer(shmRetry)
+				select {
+				case <-t.C:
+				case <-s.quit:
+					t.Stop()
+					return
+				}
+				s.poke()
+				continue
+			case shmUnread:
+				p.shm.Store(false)
+				log.Warn("shared memory frames unread")
+			case shmSent:
+				sent = true
+			}
+		}
+		if !sent {
+			rgb = toRGB(rgb, img)
+			if !s.sink.Frame(rgb, g) {
+				return
+			}
 		}
 		seen, last = seq, start
 		if s.sent == 0 {

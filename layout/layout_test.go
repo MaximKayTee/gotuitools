@@ -63,6 +63,28 @@ func TestZones(t *testing.T) {
 	if strings.Join(log, ",") != "over,under,wheel,saved" {
 		t.Errorf("%v", log)
 	}
+	// hover: over, moved within, a redraw, off
+	log = nil
+	z.Reset()
+	bar := Zone{Rect: Rect{0, 12, 10, 1}, Hover: func(x, y int) tea.Cmd { log = append(log, "hover"); return nil },
+		Leave: func() tea.Cmd { log = append(log, "leave"); return nil }}
+	z.Add(bar)
+	if _, h := z.Update(tea.MouseMotionMsg{X: 3, Y: 12}); !h {
+		t.Error("hover not handled")
+	}
+	z.Update(tea.MouseMotionMsg{X: 4, Y: 12})
+	z.Reset()
+	z.Add(bar)
+	z.Update(tea.MouseMotionMsg{X: 5, Y: 12})
+	if _, h := z.Update(tea.MouseMotionMsg{X: 5, Y: 13}); !h {
+		t.Error("leave not handled")
+	}
+	if _, h := z.Update(tea.MouseMotionMsg{X: 5, Y: 14}); h {
+		t.Error("motion over nothing handled")
+	}
+	if strings.Join(log, ",") != "hover,hover,hover,leave" {
+		t.Errorf("hover %v", log)
+	}
 	if SetPointer("") != "\x1b]22;default\x1b\\" {
 		t.Error("SetPointer")
 	}
