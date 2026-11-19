@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/MaximKayTee/gotuitools/command"
+	"github.com/MaximKayTee/gotuitools/files"
 	"github.com/MaximKayTee/gotuitools/help"
 	"github.com/MaximKayTee/gotuitools/modal"
 	"github.com/MaximKayTee/gotuitools/palette"
@@ -27,6 +28,12 @@ func (t *modalTab) commands() []command.Command {
 	return []command.Command{
 		{Name: "modal.theme", Title: "Choose theme", Key: "p",
 			Run: func([]string) tea.Cmd { return t.m.stack.Open(t.chooser()) }},
+		{Name: "modal.file", Title: "Choose file", Key: "o",
+			Run: func([]string) tea.Cmd { return t.m.stack.Open(t.files(files.Options{Title: "File"})) }},
+		{Name: "modal.folder", Title: "Choose folder", Key: "O",
+			Run: func([]string) tea.Cmd {
+				return t.m.stack.Open(t.files(files.Options{Title: "Folder", Folders: true, New: true}))
+			}},
 		{Name: "modal.reset", Title: "Reset settings", Key: "r",
 			Run: func([]string) tea.Cmd {
 				return t.m.stack.Open(&confirm{th: t.m.th, title: "Reset settings",
@@ -58,6 +65,14 @@ func (t *modalTab) chooser() *palette.Model {
 	})
 }
 
+// files is a chooser on disk; the path chosen goes to the status line.
+func (t *modalTab) files(o files.Options) *files.Model {
+	return files.New(t.m.th, o, func(path string) tea.Cmd {
+		t.m.status = path
+		return nil
+	})
+}
+
 func (t *modalTab) reset() tea.Cmd {
 	for _, f := range t.m.store.Fields() {
 		if _, err := t.m.store.Reset(f.Key); err != nil {
@@ -75,6 +90,8 @@ func (t *modalTab) view(w, _ int) string {
 		{"modal.theme", "palette.New over theme names"},
 		{"keys", "help.New: the keys screen"},
 		{"settings", "settingsui.New over the settings store"},
+		{"modal.file", "files.New: a file on disk"},
+		{"modal.folder", "files.New with Folders and New"},
 		{"modal.reset", "a Modal of this program, drawn with modal.Frame"},
 	}
 	keyW := 10

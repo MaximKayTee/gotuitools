@@ -16,7 +16,7 @@ go get github.com/MaximKayTee/gotuitools@main
 go run github.com/MaximKayTee/gotuitools/cmd/gotuitools-demo@main
 ```
 
-One tab per component: theme, text, input, list, fuzzy, modal and palette, layout, keys, settings, images. Not covered: `mpv`, `player`. Settings in `<UserConfigDir>/gotuitools-demo/config.toml`.
+One tab per component: theme, text, input, list, fuzzy, modal, palette and files, layout, keys, settings, images. Not covered: `mpv`, `player`. Settings in `<UserConfigDir>/gotuitools-demo/config.toml`.
 
 ## Packages
 
@@ -36,6 +36,7 @@ One tab per component: theme, text, input, list, fuzzy, modal and palette, layou
 | `command` | Command registry, key bindings by mode, chords, user rebinding, dispatcher |
 | `palette` | Command palette and any chooser: a modal |
 | `form` | Modal of fields to fill in: text lines and choices, a check before submit |
+| `files` | File or folder chooser on disk: a modal; path line, rows narrowed by typing, new names |
 | `help` | Status-bar hints, keys screen, KEYS.md render and check |
 | `modal` | Component and Modal contract, modal stack with message routing, `Frame`, overlays |
 | `layout` | Rects, mouse zones, dividers, pointer shapes, "Window too small", resize settle |
