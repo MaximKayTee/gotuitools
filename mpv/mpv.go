@@ -15,10 +15,13 @@
 package mpv
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
 	"math"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -62,10 +65,17 @@ type Options struct {
 	Volume float64
 	// AudioOutput is mpv's ao; "" for mpv's default, "null" in tests.
 	AudioOutput string
-	// YTDL turns on mpv's ytdl_hook: URLs resolve through yt-dlp.
+	// YTDL turns on mpv's ytdl_hook: URLs resolve through yt-dlp. A
+	// URL that fails before it loaded is loaded again, twice at most.
 	YTDL bool
 	// YTDLFormat is ytdl-format; "" mpv's default.
 	YTDLFormat string
+	// AutoCaptions adds YouTube's auto-generated captions in the
+	// video's language to the subtitle tracks; with YTDL.
+	AutoCaptions bool
+	// SubLang is the language of the subtitle track shown at the
+	// start: slang; "" none.
+	SubLang string
 	// Start is the position playback starts at.
 	Start time.Duration
 	// Speed is the playback speed; 0 is 1.
@@ -105,11 +115,23 @@ type Status struct {
 	EOF bool
 	// Size is mpv's display size; zero until known.
 	Size image.Point
+	// Subs are the subtitle tracks, Sub the ID of the one shown; 0
+	// none. Not to be changed.
+	Subs []Sub
+	Sub  int
 	// Err: the file failed to play.
 	Err error
 	// Props are the Options.Observe properties that have a value, by
 	// name. Not to be changed.
 	Props map[string]string
+}
+
+// Sub is a subtitle track.
+type Sub struct {
+	ID   int
+	Lang string // "en", "pt-BR"; "" unknown
+	// Auto: auto-generated captions, Options.AutoCaptions.
+	Auto bool
 }
 
 // Playing reports a loaded file running: not paused, not at the end.
@@ -167,6 +189,7 @@ const (
 	propDWidth
 	propDHeight
 	propEOF
+	propTrackList
 	// propExtra and up: Options.Observe, in order.
 	propExtra propID = 1000
 )
@@ -186,6 +209,7 @@ var observed = []struct {
 	{propDWidth, "dwidth", fmtInt64},
 	{propDHeight, "dheight", fmtInt64},
 	{propEOF, "eof-reached", fmtFlag},
+	{propTrackList, "track-list", fmtString},
 }
 
 // mpvEvent is a flattened mpv_event.
@@ -214,11 +238,30 @@ type mpvState struct {
 	loop   bool
 	w, h   int
 	eof    bool
+	subs   []Sub
+	sub    int
 	err    error
+	// retries left for a load that fails before the file loaded
+	retries int
 	// extra names the Options.Observe properties; props holds their
 	// values, replaced whole on a change.
 	extra []string
 	props map[string]string
+}
+
+// ytdlRetries is how often a ytdl URL that failed before it loaded is
+// loaded again: YouTube now and then hands out stream URLs that answer
+// 403 for good, and only a new extraction gives working ones.
+const ytdlRetries = 2
+
+// retry reports a failed load to run again, and counts it: an end
+// with an error before the file loaded, retries left.
+func (s *mpvState) retry(e mpvEvent) bool {
+	if e.id != evEndFile || e.reason != endFileError || s.loaded || s.retries <= 0 {
+		return false
+	}
+	s.retries--
+	return true
 }
 
 // apply folds an event in; it reports a visible change.
@@ -265,6 +308,12 @@ func (s *mpvState) apply(e mpvEvent) bool {
 		s.h = int(e.i)
 	case propEOF:
 		s.eof = e.flag
+	case propTrackList:
+		subs, sub := parseSubs(e.str)
+		if sub == s.sub && slices.Equal(subs, s.subs) {
+			return false
+		}
+		s.subs, s.sub = subs, sub
 	default:
 		return s.applyExtra(e)
 	}
@@ -308,6 +357,8 @@ func (s *mpvState) status() Status {
 		Speed:  s.speed,
 		Loop:   s.loop,
 		EOF:    s.eof,
+		Subs:   s.subs,
+		Sub:    s.sub,
 		Err:    s.err,
 		Props:  s.props,
 	}
@@ -315,6 +366,44 @@ func (s *mpvState) status() Status {
 		st.Size = image.Pt(s.w, s.h)
 	}
 	return st
+}
+
+// slang is lang, then its primary subtag: "pt-BR,pt".
+func slang(lang string) string {
+	if i := strings.IndexAny(lang, "-_"); i > 0 {
+		return lang + "," + lang[:i]
+	}
+	return lang
+}
+
+// autoTitle is the title ytdl-subs.lua gives the tracks it adds.
+const autoTitle = "auto"
+
+// parseSubs reads the subtitle tracks and the one selected from mpv's
+// track-list, as JSON.
+func parseSubs(list string) ([]Sub, int) {
+	var tracks []struct {
+		ID       int    `json:"id"`
+		Type     string `json:"type"`
+		Lang     string `json:"lang"`
+		Title    string `json:"title"`
+		Selected bool   `json:"selected"`
+	}
+	if json.Unmarshal([]byte(list), &tracks) != nil {
+		return nil, 0
+	}
+	var subs []Sub
+	sel := 0
+	for _, t := range tracks {
+		if t.Type != "sub" || t.ID <= 0 {
+			continue
+		}
+		subs = append(subs, Sub{ID: t.ID, Lang: t.Lang, Auto: t.Title == autoTitle})
+		if t.Selected {
+			sel = t.ID
+		}
+	}
+	return subs, sel
 }
 
 func secs(f float64) time.Duration {
@@ -389,9 +478,19 @@ func optionList(src Source, o Options) [][2]string {
 		opts = append(opts, [2]string{"start", fmt.Sprintf("%.3f", o.Start.Seconds())})
 	}
 	if o.YTDL {
+		var scripts []string
 		if path, err := ytdlWaitPath(); err == nil {
-			opts = append(opts, [2]string{"scripts", path})
+			scripts = append(scripts, path)
 		}
+		if path, err := ytdlSubsPath(); err == nil && o.AutoCaptions {
+			scripts = append(scripts, path)
+		}
+		if len(scripts) > 0 {
+			opts = append(opts, [2]string{"scripts", strings.Join(scripts, string(filepath.ListSeparator))})
+		}
+	}
+	if o.SubLang != "" {
+		opts = append(opts, [2]string{"slang", slang(o.SubLang)})
 	}
 	if src.Path == "" {
 		var fields []string

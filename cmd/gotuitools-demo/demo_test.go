@@ -22,7 +22,44 @@ func testModel(t *testing.T, w, h int) *model {
 	m := newModel(store, options{cell: image.Pt(10, 20), out: io.Discard})
 	m.Init()
 	m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	m.Update(key("esc")) // the guide, open on a first start
 	return m
+}
+
+// A first start opens the guide; what is done from then on fills its
+// dots, and the next start opens without it.
+func TestGuide(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	start := func() *model {
+		store, err := openConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := newModel(store, options{cell: image.Pt(10, 20), out: io.Discard})
+		m.Init()
+		m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		return m
+	}
+	m := start()
+	if v := text.Strip(m.View().Content); !strings.Contains(v, "╭─ Guide ") || !strings.Contains(v, "at any time with F12.") {
+		t.Fatalf("no guide on the first start:\n%s", v)
+	}
+	typeKeys(m, "esc", "l", "?", "esc")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF12})
+	if v := text.Strip(m.View().Content); !strings.Contains(v, "● ● ○ ● ○ ○") || !strings.Contains(v, "Every command of the tab") {
+		t.Fatalf("after next tab, keys and the guide:\n%s", v)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF12})
+	if m.stack.Len() != 0 {
+		t.Fatal("its key did not close it")
+	}
+	if m = start(); m.stack.Len() != 0 {
+		t.Fatal("the guide opened on the second start")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF12})
+	if v := text.Strip(m.View().Content); !strings.Contains(v, "● ● ○ ● ○ ○") {
+		t.Fatalf("progress not kept:\n%s", v)
+	}
 }
 
 func key(s string) tea.KeyPressMsg {

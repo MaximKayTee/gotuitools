@@ -15,6 +15,8 @@ func TestColours(t *testing.T) {
 		"007":       "7",
 		"255":       "255",
 		"red":       "#ff0000", // the palette wins over a terminal colour name
+		"default":   "",        // the terminal's own
+		"none":      "",
 	}
 	dir := t.TempDir()
 	for in, want := range cases {

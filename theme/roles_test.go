@@ -188,11 +188,11 @@ func TestBuiltInRoles(t *testing.T) {
 }
 
 // One folder holds the themes every program can use, after a program's
-// own folder and before Helix's.
+// own folder.
 func TestDirsHasASharedFolder(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
-	want := []string{filepath.Join(config, "probe", "themes"), filepath.Join(config, "gotuitools", "themes"), filepath.Join(config, "helix", "themes")}
+	want := []string{filepath.Join(config, "probe", "themes"), filepath.Join(config, "gotuitools", "themes")}
 	if got := Dirs("probe"); !slices.Equal(got, want) {
 		t.Errorf("dirs %v", got)
 	}

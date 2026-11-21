@@ -32,6 +32,7 @@ func (*Player) SetLoop(bool)                       {}
 func (*Player) SetSpeed(float64)                   {}
 func (*Player) SetVolume(float64)                  {}
 func (*Player) SetMute(bool)                       {}
+func (*Player) SetSub(int)                         {}
 func (*Player) Close()                             {}
 
 // Done is closed.

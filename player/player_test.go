@@ -187,6 +187,16 @@ func TestEndAndReplay(t *testing.T) {
 		}
 	}
 	f.took()
+	// Place hides and shows the ended frame without playing it again
+	out.take()
+	p.Hide()
+	redraws := f.redraws
+	if err := p.Place(2, 1, 40, 12); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.took(); len(got) != 0 || p.Playing() || f.redraws != redraws+1 {
+		t.Fatalf("place at the end: calls %q, playing %v, redraws %d", got, p.Playing(), f.redraws-redraws)
+	}
 	if err := p.Play(ctx, file("/v.mp4"), 0, 0, 40, 12); err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +501,8 @@ func TestNilPane(t *testing.T) {
 	p.SetMute(true)
 	p.SetLoop(true)
 	p.SetSpeed(2)
-	if p.Playing() || p.Target() != "" || p.State() != (State{}) || p.Changes() != nil {
+	if p.Playing() || p.Target() != "" || p.State() != (State{}) || p.Changes() != nil || p.Subs() != nil ||
+		!errors.Is(p.SetSub(1), ErrNotPlaying) || !errors.Is(p.Place(0, 0, 4, 4), ErrNotPlaying) {
 		t.Fatal("nil pane state")
 	}
 	for _, err := range []error{p.Toggle(), p.Pause(), p.Resume(), p.Seek(time.Second), p.SeekTo(0.5), p.Volume(5), p.ToggleMute()} {
@@ -503,5 +514,46 @@ func TestNilPane(t *testing.T) {
 	case <-p.Done():
 	default:
 		t.Fatal("nil done open")
+	}
+}
+
+func TestSubs(t *testing.T) {
+	p, op, _ := newTest(t, Options{AutoCaptions: true})
+	if err := p.SetSub(1); !errors.Is(err, ErrNotPlaying) {
+		t.Fatalf("idle: %v", err)
+	}
+	ctx := context.Background()
+	p.Play(ctx, file("/a.mp4"), 0, 0, 40, 12)
+	f := op.last(t)
+	if !f.o.AutoCaptions || f.o.SubLang != "" {
+		t.Fatalf("options %+v", f.o)
+	}
+	subs := []Sub{{ID: 1, Lang: "de"}, {ID: 2, Lang: "en-US"}, {ID: 3, Lang: "en", Auto: true}}
+	f.set(func(s *mpv.Status) { s.Subs = subs })
+	if st := p.State(); !slices.Equal(p.Subs(), subs) || st.Sub != 0 {
+		t.Fatalf("subs %+v, state %+v", p.Subs(), st)
+	}
+	f.took()
+	if err := p.SetSub(9); err == nil {
+		t.Fatal("track 9 set")
+	}
+	if err := p.SetSub(2); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.took(); !slices.Equal(got, []string{"sub 2"}) || p.State().Sub != 2 {
+		t.Fatalf("calls %q, state %+v", got, p.State())
+	}
+	// the language holds for the session after
+	p.Play(ctx, file("/b.mp4"), 0, 0, 40, 12)
+	if f = op.last(t); f.o.SubLang != "en-US" {
+		t.Fatalf("carried %q", f.o.SubLang)
+	}
+	f.set(func(s *mpv.Status) { s.Subs, s.Sub = subs, 2 })
+	if err := p.SetSub(0); err != nil {
+		t.Fatal(err)
+	}
+	p.Play(ctx, file("/c.mp4"), 0, 0, 40, 12)
+	if f = op.last(t); f.o.SubLang != "" {
+		t.Fatalf("off carried %q", f.o.SubLang)
 	}
 }

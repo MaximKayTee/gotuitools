@@ -79,6 +79,7 @@ func (t *imagesTab) sync() tea.Cmd {
 			}
 		}
 		t.enc, t.resolved = termimg.Choose(mode, t.m.opts.graphics)
+		t.m.guide.Encoder = t.enc
 		t.mode = mode
 		for _, p := range t.pics {
 			t.q.Push(t.enc.TransmitImage(p.id, termimg.Scale(p.img, p.img.Bounds(), imagePx, imagePx)))

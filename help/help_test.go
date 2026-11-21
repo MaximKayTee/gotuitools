@@ -97,3 +97,13 @@ func TestScreen(t *testing.T) {
 		t.Error("esc")
 	}
 }
+
+// The command every program adds: the keys screen on ? and F1.
+func TestCommand(t *testing.T) {
+	opened := false
+	c := Command(func() tea.Cmd { opened = true; return nil })
+	c.Run(nil)
+	if c.Name != "keys" || c.Key != "? f1" || !opened {
+		t.Fatalf("%+v opened %v", c, opened)
+	}
+}

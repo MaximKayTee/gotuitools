@@ -139,3 +139,84 @@ func TestExtraOptionsLast(t *testing.T) {
 		t.Errorf("last option %v", last)
 	}
 }
+
+func TestStateSubs(t *testing.T) {
+	var s mpvState
+	list := func(str string) mpvEvent {
+		return mpvEvent{id: evPropertyChange, prop: propTrackList, format: fmtString, str: str}
+	}
+	const tracks = `[{"id":1,"type":"video","selected":true},{"id":1,"type":"audio","lang":"en","selected":true},` +
+		`{"id":1,"type":"sub","title":"German","lang":"de","selected":false,"external":true},` +
+		`{"id":2,"type":"sub","title":"auto","lang":"en","selected":true,"external":true},` +
+		`{"id":3,"type":"sub","selected":false}]`
+	if !s.apply(list(tracks)) {
+		t.Fatal("no change")
+	}
+	want := []Sub{{ID: 1, Lang: "de"}, {ID: 2, Lang: "en", Auto: true}, {ID: 3}}
+	if st := s.status(); !slices.Equal(st.Subs, want) || st.Sub != 2 {
+		t.Fatalf("subs %+v sub %d", st.Subs, st.Sub)
+	}
+	if s.apply(list(tracks)) {
+		t.Fatal("same list: change")
+	}
+	if !s.apply(list(`[{"id":1,"type":"video","selected":true}]`)) || len(s.status().Subs) != 0 || s.status().Sub != 0 {
+		t.Fatalf("no subs: %+v", s.status())
+	}
+	if s.apply(list("not json")) {
+		t.Fatal("bad list: change")
+	}
+}
+
+func TestOptionListSubs(t *testing.T) {
+	get := func(o Options) map[string]string {
+		m := map[string]string{}
+		for _, kv := range optionList(Source{URL: "https://x"}, o) {
+			m[kv[0]] = kv[1]
+		}
+		return m
+	}
+	m := get(Options{YTDL: true, AutoCaptions: true, SubLang: "pt-BR"})
+	if m["slang"] != "pt-BR,pt" {
+		t.Errorf("slang %q", m["slang"])
+	}
+	wait, _ := ytdlWaitPath()
+	subs, _ := ytdlSubsPath()
+	if wait == "" || subs == "" || m["scripts"] != wait+":"+subs {
+		t.Errorf("scripts %q", m["scripts"])
+	}
+	m = get(Options{YTDL: true, SubLang: "en"})
+	if m["slang"] != "en" || m["scripts"] != wait {
+		t.Errorf("slang %q scripts %q", m["slang"], m["scripts"])
+	}
+	if m = get(Options{AutoCaptions: true}); m["scripts"] != "" || m["slang"] != "" {
+		t.Errorf("no ytdl: %v", m)
+	}
+}
+
+func TestStateRetry(t *testing.T) {
+	fail := mpvEvent{id: evEndFile, reason: endFileError, errMsg: "loading failed"}
+	s := mpvState{retries: ytdlRetries}
+	for i := range ytdlRetries {
+		if !s.retry(fail) {
+			t.Fatalf("failure %d not run again", i+1)
+		}
+	}
+	if s.retry(fail) {
+		t.Fatal("run again more than ytdlRetries times")
+	}
+	if !s.apply(fail) || s.status().Err == nil {
+		t.Fatalf("the last failure: %+v", s.status())
+	}
+	// not an end that is no error, not after the file loaded, not without retries
+	s = mpvState{retries: ytdlRetries}
+	if s.retry(mpvEvent{id: evEndFile, reason: 0}) || s.retry(mpvEvent{id: evFileLoaded}) {
+		t.Fatal("no failure run again")
+	}
+	s.apply(mpvEvent{id: evFileLoaded})
+	if s.retry(fail) {
+		t.Fatal("failure after the load run again")
+	}
+	if s = (mpvState{}); s.retry(fail) {
+		t.Fatal("run again without retries")
+	}
+}

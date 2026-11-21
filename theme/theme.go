@@ -126,19 +126,20 @@ func Load(file string) (Theme, error) {
 }
 
 // Find loads the theme with this name: "name.toml" in the first of dirs
-// that has it, else the registered theme of that name. "" and "default"
-// are Default.
+// that has it, else Noctalia's kitty colours for "noctalia", else the
+// registered theme of that name. "" and "default" are Default.
 func Find(name string, dirs ...string) (Theme, error) {
 	if name == "" || name == "default" {
 		return Default(), nil
 	}
-	for _, dir := range dirs {
-		file := filepath.Join(dir, name+".toml")
-		if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {
-			t, err := Load(file)
-			t.name = name
-			return t, err
-		}
+	switch file := File(name, dirs...); {
+	case file == "":
+	case file == NoctaliaFile():
+		return noctalia(file)
+	default:
+		t, err := Load(file)
+		t.name = name
+		return t, err
 	}
 	if t, ok := builtIn(name); ok {
 		return t, nil
@@ -161,14 +162,13 @@ func FindFor(name string, dark bool, dirs ...string) (Theme, error) {
 }
 
 // Dirs are the theme directories for a program: <config>/<app>/themes,
-// then <config>/gotuitools/themes, which every program reads, then
-// Helix's themes directory.
+// then <config>/gotuitools/themes, which every program reads.
 func Dirs(app string) []string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return nil
 	}
-	return []string{filepath.Join(dir, app, "themes"), filepath.Join(dir, "gotuitools", "themes"), filepath.Join(dir, "helix", "themes")}
+	return []string{filepath.Join(dir, app, "themes"), filepath.Join(dir, "gotuitools", "themes")}
 }
 
 // Ground returns the colour of plain text and the colour of the screen

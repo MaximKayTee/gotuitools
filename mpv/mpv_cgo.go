@@ -86,6 +86,7 @@ typedef struct {
 	double d;
 	int64_t i;
 	char str[512];
+	char *lstr; // a string str is too short for; freed by the caller
 	char errmsg[96];
 } tm_event;
 
@@ -101,7 +102,11 @@ static void tm_next(mpv_handle *h, double timeout, tm_event *out) {
 		out->format = p->format;
 		if (p->data) {
 			switch (p->format) {
-			case 1: { char *s = *(char **)p->data; if (s) snprintf(out->str, sizeof out->str, "%s", s); } break;
+			case 1: {
+				char *s = *(char **)p->data;
+				if (s && strlen(s) >= sizeof out->str) out->lstr = strdup(s);
+				else if (s) snprintf(out->str, sizeof out->str, "%s", s);
+			} break;
 			case 3: out->flag = *(int *)p->data; break;
 			case 4: out->i = *(int64_t *)p->data; break;
 			case 5: out->d = *(double *)p->data; break;
@@ -242,6 +247,8 @@ type Player struct {
 	rctx *C.mpv_render_context
 	sig  *C.tm_signal
 	opts Options
+	// target is what loadfile opens.
+	target string
 
 	// hmu: commands hold it shared, teardown exclusive.
 	hmu    sync.RWMutex
@@ -321,14 +328,17 @@ func New(src Source, o Options) (*Player, error) {
 		return fail("render context", r)
 	}
 	p := &Player{
-		h: h, rctx: rctx, sig: sig, opts: o,
+		h: h, rctx: rctx, sig: sig, opts: o, target: src.target(),
 		latest: -1, shown: -1,
 		stop: make(chan struct{}), renderDone: make(chan struct{}), eventDone: make(chan struct{}), done: make(chan struct{}),
 	}
 	p.st = mpvState{paused: o.Paused, volume: o.Volume, mute: o.Mute, speed: 1, loop: o.Loop, extra: o.Observe}
+	if o.YTDL && src.Path == "" {
+		p.st.retries = ytdlRetries
+	}
 	go p.eventLoop()
 	go p.renderLoop()
-	if err := p.command(false, "loadfile", src.target()); err != nil {
+	if err := p.command(false, "loadfile", p.target); err != nil {
 		p.Close()
 		return nil, err
 	}
@@ -394,6 +404,11 @@ func (p *Player) eventLoop() {
 	var ce C.tm_event
 	for {
 		C.tm_next(p.h, -1, &ce)
+		str := C.GoString(&ce.str[0])
+		if ce.lstr != nil {
+			str = C.GoString(ce.lstr)
+			C.free(unsafe.Pointer(ce.lstr))
+		}
 		select {
 		case <-p.stop:
 			return
@@ -401,15 +416,20 @@ func (p *Player) eventLoop() {
 		}
 		e := mpvEvent{
 			id: int(ce.id), err: int(ce.error), prop: propID(ce.userdata), format: int(ce.format),
-			d: float64(ce.d), i: int64(ce.i), flag: ce.flag != 0, str: C.GoString(&ce.str[0]),
+			d: float64(ce.d), i: int64(ce.i), flag: ce.flag != 0, str: str,
 			reason: int(ce.reason), errMsg: C.GoString(&ce.errmsg[0]),
 		}
 		if e.id == evShutdown {
 			return
 		}
 		p.mu.Lock()
-		changed := p.st.apply(e)
+		retry := p.st.retry(e)
+		changed := !retry && p.st.apply(e)
 		p.mu.Unlock()
+		if retry {
+			p.send("loadfile", p.target)
+			continue
+		}
 		if e.id == evPropertyChange && (e.prop == propDWidth || e.prop == propDHeight) {
 			C.tm_signal_poke(unsafe.Pointer(p.sig))
 		}
@@ -645,6 +665,18 @@ func (p *Player) SetMute(on bool) {
 	p.st.mute = on
 	p.mu.Unlock()
 	p.send("set", "mute", yesNo(on))
+}
+
+// SetSub shows the subtitle track id, a Status.Subs ID; 0 none.
+func (p *Player) SetSub(id int) {
+	p.mu.Lock()
+	p.st.sub = id
+	p.mu.Unlock()
+	v := "no"
+	if id > 0 {
+		v = strconv.Itoa(id)
+	}
+	p.send("set", "sid", v)
 }
 
 // Close stops playback; teardown finishes on a goroutine, then Done

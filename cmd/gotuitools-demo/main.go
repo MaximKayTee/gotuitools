@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/colorprofile"
 
 	"github.com/MaximKayTee/gotuitools/command"
+	"github.com/MaximKayTee/gotuitools/guide"
 	"github.com/MaximKayTee/gotuitools/help"
 	"github.com/MaximKayTee/gotuitools/kitty"
 	"github.com/MaximKayTee/gotuitools/layout"
@@ -76,6 +77,7 @@ type model struct {
 	stack  *modal.Stack
 	zones  layout.Zones
 	images *imagesTab
+	guide  *guide.Guide
 }
 
 func newModel(store *settings.Store[config], opts options) *model {
@@ -104,6 +106,7 @@ func newModel(store *settings.Store[config], opts options) *model {
 		m.tabCmds[t.name()] = m.tabCommands(t)
 		m.reg.MustAdd(m.tabCmds[t.name()]...)
 	}
+	m.newGuide()
 	m.store.Keys("keys", m.keyModes)
 	if err := m.store.Fill(); err != nil {
 		m.status = err.Error()
@@ -132,8 +135,13 @@ func (m *model) scrollBy(n int) bool {
 	return true
 }
 
+// Init shows the guide by itself on the first start.
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(tea.RequestBackgroundColor, m.images.sync())
+	cmds := []tea.Cmd{tea.RequestBackgroundColor, m.images.sync()}
+	if m.guide.First() {
+		cmds = append(cmds, m.openGuide())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

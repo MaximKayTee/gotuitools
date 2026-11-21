@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/MaximKayTee/gotuitools/command"
+	"github.com/MaximKayTee/gotuitools/guide"
 	"github.com/MaximKayTee/gotuitools/help"
 	"github.com/MaximKayTee/gotuitools/palette"
 	"github.com/MaximKayTee/gotuitools/settings"
@@ -16,6 +17,12 @@ import (
 // do adapts an action to Command.Run.
 func do(f func()) func([]string) tea.Cmd {
 	return func([]string) tea.Cmd { f(); return nil }
+}
+
+// general puts a command gotuitools gives every program in the General group.
+func general(c command.Command) command.Command {
+	c.Group = "General"
+	return c
 }
 
 func (m *model) globalCommands() []command.Command {
@@ -44,10 +51,10 @@ func (m *model) globalCommands() []command.Command {
 			Run: do(func() { m.scrollKey(m.bodyHeight()) })},
 		command.Command{Name: "palette", Title: "Commands", Group: "General", Key: "ctrl+p", Hidden: true,
 			Run: func([]string) tea.Cmd { return m.openPalette() }},
-		command.Command{Name: "keys", Title: "Keys", Group: "General", Key: "? f1",
-			Run: func([]string) tea.Cmd {
-				return m.stack.Open(help.New(m.th, "Keys", m.keyGroups(), m.tabs[m.active].title()))
-			}},
+		general(help.Command(func() tea.Cmd {
+			return m.stack.Open(help.New(m.th, "Keys", m.keyGroups(), m.tabs[m.active].title()))
+		})),
+		general(guide.Command(m.openGuide)),
 		command.Command{Name: "settings", Title: "Settings", Group: "General", Key: "ctrl+,",
 			Run: func([]string) tea.Cmd { return m.stack.Open(settingsui.New(m.th, m.store, "Settings")) }},
 		command.Command{Name: "quit", Title: "Quit", Group: "General", Key: "q ctrl+c",

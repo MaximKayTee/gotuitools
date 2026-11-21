@@ -14,6 +14,11 @@
 // nord, dracula. A program registers its own with Register; "<name>-light" is the light variant FindFor picks on
 // a light terminal (tea.RequestBackgroundColor, BackgroundColorMsg.IsDark).
 //
+// "noctalia" is the kitty colours the Noctalia shell writes,
+// <config>/kitty/themes/noctalia.conf, read on each Find and listed by
+// Names while the file is there. File names the file a theme loads from,
+// for a program to load it again when it changes.
+//
 // # One theme for every program
 //
 // A theme file in <config>/gotuitools/themes is found by every program

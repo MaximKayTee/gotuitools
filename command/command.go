@@ -59,6 +59,9 @@ func Do(f func(args []string) error) func(args []string) tea.Cmd {
 
 // A Registry holds commands by name, in the order added.
 type Registry struct {
+	// Ran, when set, is told the name of each command as it is run.
+	Ran func(name string)
+
 	mu     sync.RWMutex
 	byName map[string]int
 	all    []Command
@@ -123,14 +126,23 @@ func (r *Registry) Run(line string) tea.Cmd {
 	if len(words) == 0 {
 		return nil
 	}
-	c, ok := r.Get(words[0])
+	return r.Call(words[0], words[1:]...)
+}
+
+// Call runs the named command with args as they are. A command that
+// cannot run now does nothing; one not registered comes back as ErrorMsg.
+func (r *Registry) Call(name string, args ...string) tea.Cmd {
+	c, ok := r.Get(name)
 	if !ok {
-		return func() tea.Msg { return ErrorMsg{fmt.Errorf("no command %q", words[0])} }
+		return func() tea.Msg { return ErrorMsg{fmt.Errorf("no command %q", name)} }
 	}
 	if !c.Can() {
 		return nil
 	}
-	return c.Run(words[1:])
+	if r.Ran != nil {
+		r.Ran(c.Name)
+	}
+	return c.Run(args)
 }
 
 // All returns every command in the order added.

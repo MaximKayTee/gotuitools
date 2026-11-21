@@ -153,3 +153,26 @@ func TestLoadPerModeAndUnknown(t *testing.T) {
 		t.Errorf("unknown %v", u)
 	}
 }
+
+// A program that follows what its person does: the registry tells Ran
+// the name of each command run, by a key or a command line, and of none
+// that did not run.
+func TestRan(t *testing.T) {
+	var r Registry
+	var ran []string
+	r.Ran = func(name string) { ran = append(ran, name) }
+	run := func([]string) tea.Cmd { return nil }
+	r.MustAdd(Command{Name: "top", Run: run}, Command{Name: "tab", Run: run},
+		Command{Name: "locked", Available: func() bool { return false }, Run: run})
+	var k Keys
+	k.Bind("normal", "2", "tab 2")
+	d := Dispatcher{Keys: &k, Registry: &r}
+	d.Key("normal", tea.KeyPressMsg{Code: '2', Text: "2"})
+	r.Run("top")
+	r.Run("locked")
+	r.Run("missing")
+	r.Call("top", "two words")
+	if !reflect.DeepEqual(ran, []string{"tab", "top", "top"}) {
+		t.Errorf("ran %v", ran)
+	}
+}

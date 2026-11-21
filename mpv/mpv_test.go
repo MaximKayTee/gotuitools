@@ -202,6 +202,63 @@ func TestStreamsWithHeader(t *testing.T) {
 	}
 }
 
+// A ytdl URL that fails before it loaded is loaded again, ytdlRetries
+// times; any other source once.
+func TestRetriesFailedLoad(t *testing.T) {
+	path := testVideo(t)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deny, denied atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if denied.Load() < deny.Load() {
+			denied.Add(1)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		http.ServeContent(w, r, "clip.mp4", time.Time{}, bytes.NewReader(data))
+	}))
+	defer srv.Close()
+	// the hook's yt-dlp fails at once
+	o := Options{AudioOutput: "null", Paused: true, YTDL: true, Extra: [][2]string{{"script-opts", "ytdl_hook-ytdl_path=/bin/false"}}}
+	play := func(o Options, n int32) *Player {
+		t.Helper()
+		deny.Store(n)
+		denied.Store(0)
+		p, err := New(Source{URL: srv.URL + "/clip.mp4"}, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	p := play(o, ytdlRetries)
+	waitFor(t, "load after the failures", func() bool { return p.Status().Loaded || p.Status().Err != nil })
+	if st := p.Status(); st.Err != nil || denied.Load() != ytdlRetries {
+		t.Fatalf("err %v, denied %d", st.Err, denied.Load())
+	}
+	closeWait(t, p)
+
+	p = play(o, 100)
+	waitFor(t, "error", func() bool { return p.Status().Err != nil })
+	time.Sleep(300 * time.Millisecond)
+	if got := denied.Load(); got != ytdlRetries+1 || p.Status().Loaded {
+		t.Fatalf("always failing: %d loads, want %d", got, ytdlRetries+1)
+	}
+	closeWait(t, p)
+
+	o.YTDL, o.Extra = false, nil
+	p = play(o, 100)
+	waitFor(t, "error without ytdl", func() bool { return p.Status().Err != nil })
+	time.Sleep(300 * time.Millisecond)
+	if got := denied.Load(); got != 1 {
+		t.Fatalf("without ytdl: %d loads, want 1", got)
+	}
+	closeWait(t, p)
+}
+
 func TestBadFileReportsError(t *testing.T) {
 	if err := Available(); err != nil {
 		t.Skip(err)

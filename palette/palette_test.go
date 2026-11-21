@@ -90,3 +90,34 @@ func TestTypedRowAndEmpty(t *testing.T) {
 		t.Error("esc")
 	}
 }
+
+// A list to tidy as well as choose from: an action's key does something
+// with the highlighted item and the palette stays open, on the same row,
+// with what was typed.
+func TestActions(t *testing.T) {
+	items := []Item{{Title: "alpha"}, {Title: "beta"}, {Title: "bravo"}}
+	m := New(theme.Default(), "Vault", items, nil)
+	m.Actions = []Action{{Key: "ctrl+x", Label: "Remove", Run: func(it Item) tea.Cmd {
+		for i, o := range items {
+			if o.Title == it.Title {
+				items = append(items[:i:i], items[i+1:]...)
+			}
+		}
+		m.SetItems(items)
+		return nil
+	}}}
+	m.SetSize(40, 10)
+	if v := ansi.Strip(m.View().Content); !strings.Contains(v, "ctrl+x Remove") {
+		t.Errorf("no hint:\n%s", v)
+	}
+	typeText(m, "b")
+	m.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	if got := m.Shown(); m.Done() || len(got) != 1 || got[0].Title != "bravo" || m.Query() != "b" {
+		t.Fatalf("done %v shown %+v query %q", m.Done(), got, m.Query())
+	}
+	m.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	m.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}) // nothing highlighted
+	if len(m.Shown()) != 0 || len(items) != 1 || m.Query() != "b" {
+		t.Fatalf("shown %+v items %+v query %q", m.Shown(), items, m.Query())
+	}
+}

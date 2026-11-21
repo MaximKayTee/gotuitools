@@ -46,6 +46,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -87,6 +88,9 @@ type Options struct {
 	// YTDL: URLs resolve through mpv's ytdl_hook, YTDLFormat its format.
 	YTDL       bool
 	YTDLFormat string
+	// AutoCaptions adds YouTube's auto-generated captions in the
+	// video's language to the subtitle tracks; with YTDL.
+	AutoCaptions bool
 	// Shm: frames through shared memory while the terminal reads them.
 	Shm    bool
 	Logger *slog.Logger // discard
@@ -110,6 +114,7 @@ type engine interface {
 	SetMute(bool)
 	SetLoop(bool)
 	SetSpeed(float64)
+	SetSub(int)
 	Rendered() int
 	Close()
 	Done() <-chan struct{}
@@ -135,8 +140,13 @@ type State struct {
 	// Playing: a session runs; false after the end, Stop, or before
 	// Play.
 	Playing bool
-	Err     error
+	// Sub is the ID of the subtitle track shown, a Subs ID; 0 none.
+	Sub int
+	Err error
 }
+
+// Sub is a subtitle track.
+type Sub = mpv.Sub
 
 // Source is what to play: Target is a local path or a URL, Headers
 // its request headers ("Name: value"). Key names the session so a
@@ -176,12 +186,13 @@ func mpvSource(src Source) mpv.Source {
 type Pane struct {
 	o Options
 
-	mu    sync.Mutex // sess, vol, mute, loop, speed; session done, ended, eng
-	sess  *session
-	vol   int
-	mute  bool
-	loop  bool
-	speed float64
+	mu      sync.Mutex // sess, vol, mute, loop, speed, subLang; session done, ended, eng
+	sess    *session
+	vol     int
+	mute    bool
+	loop    bool
+	speed   float64
+	subLang string // language of the subtitles shown; "" none
 
 	shm atomic.Bool // frames through shared memory
 
@@ -294,11 +305,12 @@ func (p *Pane) Play(ctx context.Context, src Source, col, row, cols, rows int) e
 	if p.o.shmWait > 0 {
 		s.sink.wait = p.o.shmWait
 	}
-	vol, mute, loop, speed := p.vol, p.mute, p.loop, p.speed
+	vol, mute, loop, speed, subLang := p.vol, p.mute, p.loop, p.speed, p.subLang
 	p.mu.Unlock()
 	eng, err := p.o.open(mpvSource(src), mpv.Options{
 		Loop: loop, Speed: speed, Mute: mute, Paused: src.Paused, Volume: float64(vol), AudioOutput: p.o.AudioOutput,
 		YTDL: p.o.YTDL, YTDLFormat: cmp.Or(src.Format, p.o.YTDLFormat), Start: src.Start,
+		AutoCaptions: p.o.AutoCaptions, SubLang: subLang,
 		Size:     s.size(p.o.CellPx),
 		OnFrame:  s.poke,
 		OnChange: func() { p.changed(s) },
@@ -379,8 +391,33 @@ func (p *Pane) place(s *session, eng engine, col, row, cols, rows int) {
 	s.sink.Move(col, row)
 }
 
+// Place moves, resizes or shows the open session's frame at the rect,
+// as Play of the same key does; an ended one is not played again.
+// ErrNotPlaying without an open session.
+func (p *Pane) Place(col, row, cols, rows int) error {
+	if cols <= 0 || rows <= 0 {
+		return fmt.Errorf("player: empty rect %dx%d", cols, rows)
+	}
+	if p == nil {
+		return ErrNotPlaying
+	}
+	p.mu.Lock()
+	s := p.sess
+	var eng engine
+	if s != nil {
+		eng = s.eng
+	}
+	p.mu.Unlock()
+	if eng == nil {
+		return ErrNotPlaying
+	}
+	p.place(s, eng, col, row, cols, rows)
+	p.notify()
+	return nil
+}
+
 // Hide deletes the shown frame; playback goes on. The next Play of the
-// same key shows it again.
+// same key or Place shows it again.
 func (p *Pane) Hide() {
 	if p == nil {
 		return
@@ -636,7 +673,7 @@ func (p *Pane) State() State {
 	}
 	st := eng.Status()
 	return State{Target: s.key, Pos: st.Pos, Dur: st.Dur, Paused: st.Paused, Muted: mute,
-		Volume: vol, Loop: loop, Speed: speed, Loaded: st.Loaded, Playing: !ended, Err: st.Err}
+		Volume: vol, Loop: loop, Speed: speed, Loaded: st.Loaded, Playing: !ended, Sub: st.Sub, Err: st.Err}
 }
 
 // Changes receives State after it changed: at once, then at most every
@@ -804,4 +841,51 @@ func (p *Pane) SetSpeed(x float64) {
 		p.speed = x
 		return func(e engine) { e.SetSpeed(x) }
 	})
+}
+
+// open is the open session's engine, ended or not; nil without one.
+func (p *Pane) open() engine {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.sess == nil {
+		return nil
+	}
+	return p.sess.eng
+}
+
+// Subs are the open session's subtitle tracks. Not to be changed.
+func (p *Pane) Subs() []Sub {
+	eng := p.open()
+	if eng == nil {
+		return nil
+	}
+	return eng.Status().Subs
+}
+
+// SetSub shows the subtitle track id, a Subs ID; 0 none. Its language
+// is shown in the sessions after too. ErrNotPlaying without an open
+// session.
+func (p *Pane) SetSub(id int) error {
+	eng := p.open()
+	if eng == nil {
+		return ErrNotPlaying
+	}
+	lang := ""
+	if id != 0 {
+		subs := eng.Status().Subs
+		i := slices.IndexFunc(subs, func(s Sub) bool { return s.ID == id })
+		if i < 0 {
+			return fmt.Errorf("player: no subtitle track %d", id)
+		}
+		lang = subs[i].Lang
+	}
+	p.mu.Lock()
+	p.subLang = lang
+	p.mu.Unlock()
+	eng.SetSub(id)
+	p.notify()
+	return nil
 }

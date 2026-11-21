@@ -4,6 +4,7 @@
 //	type            narrow (fuzzy.Search over title, group, search words, note)
 //	up down ctrl+p ctrl+n pgup pgdown   move
 //	enter           choose
+//	an Action's key act on the highlighted item, the palette left open
 //	esc ctrl+c      close
 //	wheel, click    move, choose
 package palette
@@ -31,6 +32,15 @@ type Item struct {
 	Value  any
 }
 
+// Action is a key that does something with the highlighted item and
+// leaves the palette open: remove it, rename it. It is named in the
+// bottom border: "ctrl+x Remove".
+type Action struct {
+	Key   string // as tea names it: "ctrl+x"
+	Label string
+	Run   func(Item) tea.Cmd
+}
+
 // Model is a palette. Use New.
 type Model struct {
 	th     theme.Theme
@@ -44,6 +54,8 @@ type Model struct {
 	Typed func(text string) (Item, bool)
 	// MaxWidth caps the box width; 0 is 72.
 	MaxWidth int
+	// Actions are keys that act on the highlighted item.
+	Actions []Action
 
 	w, h   int
 	x, y   int
@@ -73,6 +85,16 @@ func Commands(th theme.Theme, reg *command.Registry, keys *command.Keys, mode st
 		items = append(items, Item{Title: c.Label(), Note: note, Group: c.Group, Search: []string{c.Name}, Value: c.Name})
 	}
 	return New(th, "Commands", items, func(it Item) tea.Cmd { return reg.Run(it.Value.(string)) })
+}
+
+// SetItems replaces the items, what is typed kept: after an Action has
+// changed them.
+func (m *Model) SetItems(items []Item) {
+	at := m.cur.At
+	m.all = items
+	m.filter()
+	m.cur.At = at
+	m.cur.Clamp()
 }
 
 // SetQuery replaces what is typed.
@@ -137,6 +159,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "down", "ctrl+p", "ctrl+n", "pgup", "pgdown":
 			m.cur.Key(msg.String(), false)
 			return m, nil
+		}
+		for _, a := range m.Actions {
+			if a.Key == msg.String() && m.cur.At < len(m.shown) {
+				return m, a.Run(m.shown[m.cur.At])
+			}
 		}
 		if m.line.Key(msg) {
 			m.filter()
@@ -207,6 +234,10 @@ func (m *Model) View() tea.View {
 	}
 	pos := m.cur.Pos()
 	pos.Skip = 1
-	lines := modal.Frame(m.th, modal.Box{Title: m.title, Focused: true, Pos: pos}, body, w)
+	keys := make([]string, len(m.Actions))
+	for i, a := range m.Actions {
+		keys[i] = a.Key + " " + a.Label
+	}
+	lines := modal.Frame(m.th, modal.Box{Title: m.title, Keys: strings.Join(keys, "  "), Focused: true, Pos: pos}, body, w)
 	return tea.NewView(strings.Join(lines, "\n"))
 }

@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/MaximKayTee/gotuitools/command"
 	"github.com/MaximKayTee/gotuitools/list"
 	"github.com/MaximKayTee/gotuitools/modal"
 	"github.com/MaximKayTee/gotuitools/text"
@@ -32,6 +33,12 @@ type Screen struct {
 	colW int
 	top  int
 	done bool
+}
+
+// Command opens the keys screen: on ? and F1 until the person binds
+// other keys.
+func Command(open func() tea.Cmd) command.Command {
+	return command.Command{Name: "keys", Title: "Keys", Key: "? f1", Run: func([]string) tea.Cmd { return open() }}
 }
 
 // New is a keys screen scrolled to group open, "" the top.

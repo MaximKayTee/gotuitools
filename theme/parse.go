@@ -132,7 +132,8 @@ var terminal = map[string]string{
 
 // colour reads a colour as "#rrggbb" or a palette number, looking names up
 // in the palette first, then among the terminal colours. An alpha byte, as
-// in "#rrggbbaa", is dropped, as Helix does.
+// in "#rrggbbaa", is dropped, as Helix does. "default", Helix's reset, and
+// "none", which Helix skips, are the terminal's own: "".
 func colour(value any, palette map[string]string) (string, error) {
 	name, ok := value.(string)
 	if !ok {
@@ -140,6 +141,9 @@ func colour(value any, palette map[string]string) (string, error) {
 	}
 	if c, ok := palette[name]; ok {
 		return c, nil
+	}
+	if name == "default" || name == "none" {
+		return "", nil
 	}
 	if c, ok := terminal[name]; ok {
 		return c, nil

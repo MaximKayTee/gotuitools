@@ -125,6 +125,11 @@ func (f *fakeEngine) SetSpeed(x float64) {
 	f.set(func(s *mpv.Status) { s.Speed = x })
 }
 
+func (f *fakeEngine) SetSub(id int) {
+	f.call("sub " + strconv.Itoa(id))
+	f.set(func(s *mpv.Status) { s.Sub = id })
+}
+
 func (f *fakeEngine) Rendered() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
