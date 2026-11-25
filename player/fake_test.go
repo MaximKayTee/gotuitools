@@ -130,6 +130,10 @@ func (f *fakeEngine) SetSub(id int) {
 	f.set(func(s *mpv.Status) { s.Sub = id })
 }
 
+func (f *fakeEngine) SetSpans(spans []mpv.Span) {
+	f.call("spans " + strconv.Itoa(len(spans)))
+}
+
 func (f *fakeEngine) Rendered() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

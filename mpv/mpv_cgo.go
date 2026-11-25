@@ -177,6 +177,29 @@ static int tm_render_create(mpv_render_context **out, mpv_handle *h, tm_signal *
 	return r;
 }
 
+typedef struct { void *(*get_proc_address)(void *, const char *); void *get_proc_address_ctx; } tm_gl_init;
+typedef struct { int fbo, w, h, internal_format; } tm_gl_fbo;
+
+// tm_render_create_gl is tm_render_create for the GL context current on
+// this thread; getproc is its address lookup.
+static int tm_render_create_gl(mpv_render_context **out, mpv_handle *h, tm_signal *sig, void *getproc) {
+	char api[] = "opengl";
+	tm_gl_init init = {(void *(*)(void *, const char *))getproc, NULL};
+	tm_render_param params[] = {{1, api}, {2, &init}, {0, NULL}};
+	int r = f_render_context_create(out, h, params);
+	if (r >= 0) f_render_context_set_update_callback(*out, tm_signal_poke, sig);
+	return r;
+}
+
+// tm_render_gl draws the current frame into the framebuffer fbo, 8-bit
+// RGB, its first row the top.
+static int tm_render_gl(mpv_render_context *c, int fbo, int w, int h) {
+	tm_gl_fbo target = {fbo, w, h, 0x8051};
+	int flip = 0;
+	tm_render_param params[] = {{3, &target}, {4, &flip}, {0, NULL}};
+	return f_render_context_render(c, params);
+}
+
 static uint64_t tm_render_update(mpv_render_context *c) { return f_render_context_update(c); }
 static void tm_render_free(mpv_render_context *c) { f_render_context_free(c); }
 
@@ -199,6 +222,8 @@ import "C"
 import (
 	"fmt"
 	"image"
+	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -245,6 +270,7 @@ func boolC(b bool) C.int {
 type Player struct {
 	h    *C.mpv_handle
 	rctx *C.mpv_render_context
+	gl   *glContext // render goroutine; nil: the software renderer
 	sig  *C.tm_signal
 	opts Options
 	// target is what loadfile opens.
@@ -255,6 +281,7 @@ type Player struct {
 	closed atomic.Bool
 
 	mu         sync.Mutex
+	gpu        string // the GPU's name; "" the software renderer
 	st         mpvState
 	bufs       [3]*image.RGBA
 	seqs       [3]uint64
@@ -293,6 +320,12 @@ func New(src Source, o Options) (*Player, error) {
 		C.tm_terminate_destroy(h)
 		return nil, fmt.Errorf("mpv: %s: %s", what, C.GoString(C.tm_error_string(r)))
 	}
+	for _, kv := range optional {
+		k, v := C.CString(kv[0]), C.CString(kv[1])
+		C.tm_set_option(h, k, v)
+		C.free(unsafe.Pointer(k))
+		C.free(unsafe.Pointer(v))
+	}
 	for _, kv := range optionList(src, o) {
 		k, v := C.CString(kv[0]), C.CString(kv[1])
 		r := C.tm_set_option(h, k, v)
@@ -301,12 +334,6 @@ func New(src Source, o Options) (*Player, error) {
 		if r < 0 {
 			return fail("option "+kv[0], r)
 		}
-	}
-	for _, kv := range optional {
-		k, v := C.CString(kv[0]), C.CString(kv[1])
-		C.tm_set_option(h, k, v)
-		C.free(unsafe.Pointer(k))
-		C.free(unsafe.Pointer(v))
 	}
 	if r := C.tm_initialize(h); r < 0 {
 		return fail("initialize", r)
@@ -321,24 +348,26 @@ func New(src Source, o Options) (*Player, error) {
 		C.tm_observe(h, C.uint64_t(uint64(propExtra)+uint64(i)), n, C.int(fmtString))
 		C.free(unsafe.Pointer(n))
 	}
-	sig := C.tm_signal_new()
-	var rctx *C.mpv_render_context
-	if r := C.tm_render_create(&rctx, h, sig); r < 0 {
-		C.tm_signal_free(sig)
-		return fail("render context", r)
-	}
 	p := &Player{
-		h: h, rctx: rctx, sig: sig, opts: o, target: src.target(),
+		h: h, sig: C.tm_signal_new(), opts: o, target: src.target(),
 		latest: -1, shown: -1,
 		stop: make(chan struct{}), renderDone: make(chan struct{}), eventDone: make(chan struct{}), done: make(chan struct{}),
 	}
-	p.st = mpvState{paused: o.Paused, volume: o.Volume, mute: o.Mute, speed: 1, loop: o.Loop, extra: o.Observe}
+	p.st = mpvState{paused: o.Paused, volume: o.Volume, mute: o.Mute, userMute: o.Mute, speed: 1, loop: o.Loop, extra: o.Observe,
+		spans: slices.Clone(o.Spans), landed: -1, skipped: -1}
 	if o.YTDL && src.Path == "" {
 		p.st.retries = ytdlRetries
 	}
+	created := make(chan C.int, 1)
+	go p.renderLoop(created)
+	if r := <-created; r < 0 {
+		C.tm_signal_free(p.sig)
+		return fail("render context", r)
+	}
+	// the event goroutine after loadfile: OnChange not before New returns
+	err := p.command(false, "loadfile", p.target)
 	go p.eventLoop()
-	go p.renderLoop()
-	if err := p.command(false, "loadfile", p.target); err != nil {
+	if err != nil {
 		p.Close()
 		return nil, err
 	}
@@ -425,10 +454,21 @@ func (p *Player) eventLoop() {
 		p.mu.Lock()
 		retry := p.st.retry(e)
 		changed := !retry && p.st.apply(e)
+		to, remute := -1.0, false
+		if !retry {
+			to, remute = p.st.follow(e)
+		}
+		mute := p.st.muted()
 		p.mu.Unlock()
 		if retry {
 			p.send("loadfile", p.target)
 			continue
+		}
+		if to >= 0 {
+			p.send("seek", strconv.FormatFloat(to, 'f', 3, 64), "absolute+exact")
+		}
+		if remute {
+			p.send("set", "mute", yesNo(mute))
 		}
 		if e.id == evPropertyChange && (e.prop == propDWidth || e.prop == propDHeight) {
 			C.tm_signal_poke(unsafe.Pointer(p.sig))
@@ -462,13 +502,103 @@ func (p *Player) frameSize(native image.Point) image.Point {
 	return RenderSize(native, 1, p.opts.MaxSide)
 }
 
-func (p *Player) renderLoop() {
+// createRender makes the render context on the calling thread: the
+// GPU's, on a GL context with no window, the thread locked to it; else,
+// or with Options.Software, the software renderer's.
+func (p *Player) createRender() C.int {
+	if !p.opts.Software {
+		runtime.LockOSThread()
+		if gl, err := glOpen(); err == nil {
+			if C.tm_render_create_gl(&p.rctx, p.h, p.sig, gl.getProc()) >= 0 {
+				p.gl = gl
+				p.mu.Lock()
+				p.gpu = gl.renderer()
+				p.mu.Unlock()
+				return 0
+			}
+			gl.close()
+		}
+		runtime.UnlockOSThread()
+	}
+	return C.tm_render_create(&p.rctx, p.h, p.sig)
+}
+
+// freeRender frees the render context and the GL context under it, on
+// the thread that made them.
+func (p *Player) freeRender() {
+	if p.rctx != nil {
+		C.tm_render_free(p.rctx)
+		p.rctx = nil
+	}
+	if p.gl != nil {
+		p.gl.close()
+		p.gl = nil
+		runtime.UnlockOSThread()
+	}
+	p.mu.Lock()
+	p.gpu = ""
+	p.mu.Unlock()
+}
+
+// glFails is the count of frames running a GPU may fail before the
+// software renderer takes over.
+const glFails = 3
+
+// toSoftware gives a failing GPU's place to the software renderer. mpv
+// drops the video with its render context: the first video track is
+// chosen again. A video without sound ends there with mpv's error.
+func (p *Player) toSoftware() bool {
+	p.freeRender()
+	if C.tm_render_create(&p.rctx, p.h, p.sig) < 0 {
+		p.rctx = nil
+		return false
+	}
+	p.send("set", "vid", "1")
+	return true
+}
+
+// draw renders the current frame into buf: on the GPU, read back, or
+// by the software renderer.
+func (p *Player) draw(buf *image.RGBA) bool {
+	w, h := buf.Rect.Dx(), buf.Rect.Dy()
+	if p.gl == nil {
+		return C.tm_render_sw(p.rctx, C.int(w), C.int(h), C.size_t(buf.Stride), unsafe.Pointer(&buf.Pix[0])) >= 0
+	}
+	fbo, ok := p.gl.size(buf.Rect.Size())
+	return ok && C.tm_render_gl(p.rctx, C.int(fbo), C.int(w), C.int(h)) >= 0 && p.gl.read(buf)
+}
+
+func (p *Player) renderLoop(created chan<- C.int) {
+	r := p.createRender()
+	created <- r
+	if r < 0 {
+		return
+	}
 	defer close(p.renderDone)
-	defer C.tm_render_free(p.rctx)
+	defer p.freeRender()
+	fails := 0
+	// draw is p.draw; false also when the software renderer could not
+	// take a failing GPU's place: no frames from then on.
+	draw := func(buf *image.RGBA) (drawn, ok bool) {
+		if p.draw(buf) {
+			fails = 0
+			return true, true
+		}
+		if p.gl == nil {
+			return false, true
+		}
+		if fails++; fails < glFails {
+			return false, true
+		}
+		fails = 0
+		ok = p.toSoftware()
+		p.Redraw()
+		return false, ok
+	}
 	var last image.Point
 	// scratch takes the first frame before dwidth is known: mpv shows
 	// no frame, and sets no dwidth, until one is rendered.
-	scratch := make([]byte, 2*2*4)
+	scratch := &image.RGBA{Pix: make([]byte, 2*2*4), Stride: 8, Rect: image.Rect(0, 0, 2, 2)}
 	for {
 		C.tm_signal_wait(p.sig, 100)
 		select {
@@ -485,7 +615,9 @@ func (p *Player) renderLoop() {
 		p.mu.Unlock()
 		if native == (image.Point{}) {
 			if flags&1 != 0 {
-				C.tm_render_sw(p.rctx, 2, 2, 8, unsafe.Pointer(&scratch[0]))
+				if _, ok := draw(scratch); !ok {
+					return
+				}
 			}
 			continue
 		}
@@ -493,7 +625,14 @@ func (p *Player) renderLoop() {
 			continue
 		}
 		i, buf := p.backBuffer(want)
-		if C.tm_render_sw(p.rctx, C.int(want.X), C.int(want.Y), C.size_t(buf.Stride), unsafe.Pointer(&buf.Pix[0])) < 0 {
+		drawn, ok := draw(buf)
+		if !ok {
+			return
+		}
+		if !drawn {
+			if p.gl != nil {
+				p.Redraw() // the GPU again, glFails times at most
+			}
 			continue
 		}
 		last = want
@@ -532,6 +671,14 @@ func (p *Player) Redraw() {
 	p.redraw = true
 	p.mu.Unlock()
 	C.tm_signal_poke(unsafe.Pointer(p.sig))
+}
+
+// Renderer is the name of the GPU the frames are rendered on; "" mpv's
+// software renderer.
+func (p *Player) Renderer() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.gpu
 }
 
 // Rendered is the count of frames rendered so far.
@@ -660,11 +807,21 @@ func (p *Player) SetVolume(v float64) {
 	p.send("set", "volume", strconv.FormatFloat(v, 'f', -1, 64))
 }
 
+// SetMute mutes or unmutes; a mute span keeps it muted.
 func (p *Player) SetMute(on bool) {
 	p.mu.Lock()
+	p.st.userMute = on
+	on = p.st.muted()
 	p.st.mute = on
 	p.mu.Unlock()
 	p.send("set", "mute", yesNo(on))
+}
+
+// SetSpans replaces the spans to skip or play muted.
+func (p *Player) SetSpans(spans []Span) {
+	p.mu.Lock()
+	p.st.spans = slices.Clone(spans)
+	p.mu.Unlock()
 }
 
 // SetSub shows the subtitle track id, a Status.Subs ID; 0 none.

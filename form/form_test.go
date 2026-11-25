@@ -140,3 +140,55 @@ func TestViewAndClick(t *testing.T) {
 		t.Errorf("%q", l)
 	}
 }
+
+func TestToggles(t *testing.T) {
+	days := []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+	var got []string
+	m := New(theme.Default(), "Rule", []Field{
+		{Label: "Pattern", Value: "steam"},
+		{Label: "Days", Toggles: days, Value: "mon, wed,xyz"},
+	}, func(v []string) tea.Cmd { got = v; return nil })
+	m.SetSize(80, 20)
+	if v := m.Values()[1]; v != "mon,wed" {
+		t.Fatalf("start: %q", v)
+	}
+	key(m, tea.KeyTab, 0)
+	key(m, tea.KeySpace, 0) // mon off
+	key(m, tea.KeyLeft, 0)  // around to sun
+	key(m, tea.KeySpace, 0)
+	key(m, tea.KeyRight, 0)
+	key(m, tea.KeyRight, 0)
+	key(m, tea.KeySpace, 0) // tue on
+	typeText(m, "x")        // a toggles field takes no text
+	if v := m.Values(); !slices.Equal(v, []string{"steam", "tue,wed,sun"}) {
+		t.Fatalf("keys: %q", v)
+	}
+	for _, w := range []int{80, 30, 12} {
+		m.SetSize(w, 20)
+		for i, l := range strings.Split(m.View().Content, "\n") {
+			if n := ansi.StringWidth(l); n != min(w, 60) {
+				t.Errorf("w %d line %d: %d cells", w, i, n)
+			}
+		}
+	}
+	m.SetSize(80, 20)
+	row := strings.Split(ansi.Strip(m.View().Content), "\n")[2]
+	if !strings.Contains(row, " mon  tue  wed  thu  fri  sat  sun ") {
+		t.Fatalf("row %q", row)
+	}
+	// click each toggle by where its name is drawn
+	m.SetOrigin(10, 5)
+	x0 := strings.Index(row, " fri ") // byte index: the border is 3 bytes, 1 cell
+	m.Update(tea.MouseClickMsg(tea.Mouse{X: 10 + x0 - 2 + 1, Y: 7, Button: tea.MouseLeft}))
+	if v := m.Values()[1]; v != "tue,wed,fri,sun" {
+		t.Fatalf("click fri: %q", v)
+	}
+	m.Update(tea.MouseClickMsg(tea.Mouse{X: 10 + 2, Y: 7, Button: tea.MouseLeft})) // on the label
+	if v := m.Values()[1]; v != "tue,wed,fri,sun" {
+		t.Fatalf("click on the label: %q", v)
+	}
+	key(m, tea.KeyEnter, 0)
+	if !slices.Equal(got, []string{"steam", "tue,wed,fri,sun"}) {
+		t.Fatalf("submit %q", got)
+	}
+}

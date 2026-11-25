@@ -220,3 +220,92 @@ func TestStateRetry(t *testing.T) {
 		t.Fatal("run again without retries")
 	}
 }
+
+func TestSpans(t *testing.T) {
+	sec := func(f float64) time.Duration { return time.Duration(f * float64(time.Second)) }
+	at := func(s *mpvState, pos float64) (float64, bool) {
+		s.apply(mpvEvent{id: evPropertyChange, prop: propTimePos, format: fmtDouble, d: pos})
+		return s.follow(mpvEvent{id: evPropertyChange, prop: propTimePos, format: fmtDouble, d: pos})
+	}
+	seek := func(s *mpvState, pos float64) {
+		s.follow(mpvEvent{id: evSeek})
+		at(s, pos)
+		s.follow(mpvEvent{id: evRestart})
+	}
+	newState := func() *mpvState {
+		return &mpvState{loaded: true, landed: -1, skipped: -1, spans: []Span{
+			{Start: 0, End: sec(5)},        // intro
+			{Start: sec(20), End: sec(30)}, // sponsor
+			{Start: sec(28), End: sec(40)}, // overlaps it
+			{Start: sec(50), End: sec(52), Mute: true},
+		}}
+	}
+
+	// nothing before the file loaded
+	s := newState()
+	s.loaded = false
+	if to, _ := at(s, 0); to != -1 {
+		t.Fatalf("before load: to %v", to)
+	}
+	// from the start: the span at 0 skips
+	s = newState()
+	if to, _ := at(s, 0); to != 5 || s.skips != 1 || s.skipped != 0 || s.pos != 5 {
+		t.Fatalf("start: to %v, %+v", to, s)
+	}
+	// the skip's own seek lands at the end: plays on
+	seek(s, 5)
+	if to, _ := at(s, 5.04); to != -1 {
+		t.Fatalf("after skip: to %v", to)
+	}
+	// played into: skipped to the end of the overlapping one too
+	at(s, 19.96)
+	if to, _ := at(s, 20.01); to != 40 || s.skipped != 1 {
+		t.Fatalf("into sponsor: to %v, skipped %d", to, s.skipped)
+	}
+	// a seek into a span plays it and the one overlapping it
+	seek(s, 25)
+	for _, pos := range []float64{25.04, 27.9, 28.1, 31, 39.9} {
+		if to, _ := at(s, pos); to != -1 {
+			t.Fatalf("seeked into, at %v: to %v", pos, to)
+		}
+	}
+	// a seek before a span: playing into it skips
+	seek(s, 18)
+	if to, _ := at(s, 20); to != 40 || s.skips != 3 {
+		t.Fatalf("seeked before: to %v, skips %d", to, s.skips)
+	}
+	// positions while a seek runs are not played ones
+	s.follow(mpvEvent{id: evSeek})
+	if to, _ := at(s, 21); to != -1 {
+		t.Fatalf("seeking: to %v", to)
+	}
+	s.follow(mpvEvent{id: evRestart})
+	at(s, 21.04)
+	// the end of a skip span plays: a seek can land a frame short
+	s = newState()
+	seek(s, 10)
+	if to, _ := at(s, 39.95); to != -1 {
+		t.Fatalf("tail: to %v", to)
+	}
+
+	// a mute span mutes however it was reached, the set mute kept
+	s = newState()
+	seek(s, 49)
+	if _, remute := at(s, 49.9); remute || s.muted() {
+		t.Fatal("muted before the span")
+	}
+	if _, remute := at(s, 50); !remute || !s.muted() {
+		t.Fatal("not muted in the span")
+	}
+	seek(s, 51)
+	if _, remute := at(s, 51.1); remute || !s.muted() {
+		t.Fatal("seek in the span unmuted")
+	}
+	if _, remute := at(s, 52); !remute || s.muted() {
+		t.Fatal("muted after the span")
+	}
+	s.userMute = true
+	if !s.muted() {
+		t.Fatal("set mute lost")
+	}
+}

@@ -1,12 +1,15 @@
 // Package form is a box of fields to fill in: a modal.Modal. A field
-// is a line of text or one of a list of choices.
+// is a line of text, one of a list of choices, or a row of toggles.
 //
 //	type, paste              edit the field (input.Line's keys)
 //	tab down, shift+tab up   next, previous field
 //	left right space         the choice before, after (a choice field)
+//	left right               the toggle before, after (a toggles field)
+//	space                    flip the toggle (a toggles field)
 //	enter                    submit
 //	esc ctrl+c               close
-//	click                    that field; a choice field: the choice after
+//	click                    that field; a choice field: the choice after;
+//	                         a toggles field: flip the toggle clicked
 package form
 
 import (
@@ -31,6 +34,9 @@ type Field struct {
 	Value string
 	// Choices makes the field one of these.
 	Choices []string
+	// Toggles makes the field a row of these, each on or off. Value and
+	// the field's value are the ones on, joined by ",".
+	Toggles []string
 	// Limit is the most runes a text field takes; 0 no limit.
 	Limit int
 }
@@ -42,6 +48,8 @@ type Model struct {
 	fields []Field
 	lines  []input.Line // text fields
 	choice []int        // choice fields
+	on     [][]bool     // toggles fields
+	pos    []int        // toggles fields: the toggle the keys go to
 	at     int
 	submit func(values []string) tea.Cmd
 	// Check runs before submit; its error is shown and the form stays
@@ -60,8 +68,18 @@ type Model struct {
 // field, text fields trimmed.
 func New(th theme.Theme, title string, fields []Field, submit func(values []string) tea.Cmd) *Model {
 	m := &Model{th: th, title: title, fields: fields, submit: submit,
-		lines: make([]input.Line, len(fields)), choice: make([]int, len(fields))}
+		lines: make([]input.Line, len(fields)), choice: make([]int, len(fields)),
+		on: make([][]bool, len(fields)), pos: make([]int, len(fields))}
 	for i, f := range fields {
+		if len(f.Toggles) > 0 {
+			m.on[i] = make([]bool, len(f.Toggles))
+			for v := range strings.SplitSeq(f.Value, ",") {
+				if k := slices.Index(f.Toggles, strings.TrimSpace(v)); k >= 0 {
+					m.on[i][k] = true
+				}
+			}
+			continue
+		}
 		if len(f.Choices) > 0 {
 			m.choice[i] = max(slices.Index(f.Choices, f.Value), 0)
 			continue
@@ -72,11 +90,20 @@ func New(th theme.Theme, title string, fields []Field, submit func(values []stri
 	return m
 }
 
-// Values is a value for each field: the text, trimmed, or the choice.
+// Values is a value for each field: the text, trimmed, the choice, or
+// the toggles on joined by ",".
 func (m *Model) Values() []string {
 	out := make([]string, len(m.fields))
 	for i, f := range m.fields {
-		if len(f.Choices) > 0 {
+		if len(f.Toggles) > 0 {
+			var on []string
+			for k, t := range f.Toggles {
+				if m.on[i][k] {
+					on = append(on, t)
+				}
+			}
+			out[i] = strings.Join(on, ",")
+		} else if len(f.Choices) > 0 {
 			out[i] = f.Choices[m.choice[i]]
 		} else {
 			out[i] = strings.TrimSpace(m.lines[i].String())
@@ -123,12 +150,74 @@ func (m *Model) turn(i, d int) {
 	m.choice[i] = ((m.choice[i]+d)%n + n) % n
 }
 
+// flip turns toggle k of field i on or off.
+func (m *Model) flip(i, k int) {
+	m.on[i][k] = !m.on[i][k]
+	m.err = nil
+}
+
+// toggleCell is how toggle t is drawn: a cell of its width.
+func toggleCell(t string) string { return " " + t + " " }
+
+// toggleAt is the toggle of field i at x cells into the value; -1 none.
+func (m *Model) toggleAt(i, x int) int {
+	for k, t := range m.fields[i].Toggles {
+		w := text.Width(toggleCell(t))
+		if x >= 0 && x < w {
+			return k
+		}
+		x -= w
+	}
+	return -1
+}
+
+// labelWidth is the width of the label column; 0 none.
+func (m *Model) labelWidth() int {
+	lw := 0
+	for _, f := range m.fields {
+		lw = max(lw, text.Width(f.Label))
+	}
+	return min(lw, (m.width()-2)/2)
+}
+
+// valueX is where the values start inside the border.
+func (m *Model) valueX() int {
+	if lw := m.labelWidth(); lw > 0 {
+		return 1 + lw + 2
+	}
+	return 1
+}
+
+// toggles draws toggles field i in vw cells: those on in the selection
+// colours, those off muted, the one the keys go to underlined.
+func (m *Model) toggles(i, vw int) string {
+	var b strings.Builder
+	used := 0
+	for k, t := range m.fields[i].Toggles {
+		c := toggleCell(t)
+		if used+text.Width(c) > vw {
+			break
+		}
+		used += text.Width(c)
+		st := m.th.Lip("ui.text.inactive")
+		if m.on[i][k] {
+			st = m.th.Lip("ui.selection")
+		}
+		if i == m.at && k == m.pos[i] {
+			st = st.Underline(true).Bold(true)
+		}
+		b.WriteString(st.Render(c))
+	}
+	return b.String() + strings.Repeat(" ", vw-used)
+}
+
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if len(m.fields) == 0 {
 		m.done = true
 		return m, nil
 	}
 	isChoice := len(m.fields[m.at].Choices) > 0
+	isToggles := len(m.fields[m.at].Toggles) > 0
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
@@ -144,6 +233,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.move(-1)
 			return m, nil
 		}
+		if isToggles {
+			n := len(m.fields[m.at].Toggles)
+			switch msg.String() {
+			case "left":
+				m.pos[m.at] = (m.pos[m.at] + n - 1) % n
+			case "right":
+				m.pos[m.at] = (m.pos[m.at] + 1) % n
+			case "space":
+				m.flip(m.at, m.pos[m.at])
+			}
+			return m, nil
+		}
 		if isChoice {
 			switch msg.String() {
 			case "left":
@@ -157,7 +258,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = nil
 		}
 	case tea.PasteMsg:
-		if !isChoice && m.lines[m.at].Update(msg) {
+		if !isChoice && !isToggles && m.lines[m.at].Update(msg) {
 			m.err = nil
 		}
 	case tea.MouseClickMsg:
@@ -168,6 +269,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if len(m.fields[i].Choices) > 0 && m.at == i {
 			m.turn(i, 1)
+		}
+		if len(m.fields[i].Toggles) > 0 {
+			if k := m.toggleAt(i, msg.X-m.x-1-m.valueX()); k >= 0 {
+				m.pos[i] = k
+				m.flip(i, k)
+			}
 		}
 		m.at = i
 	}
@@ -195,11 +302,7 @@ func (m *Model) View() tea.View {
 		return tea.NewView("")
 	}
 	iw := w - 2
-	lw := 0
-	for _, f := range m.fields {
-		lw = max(lw, text.Width(f.Label))
-	}
-	lw = min(lw, iw/2)
+	lw := m.labelWidth()
 	vw := iw - 2
 	if lw > 0 {
 		vw -= lw + 2
@@ -211,6 +314,8 @@ func (m *Model) View() tea.View {
 			row += m.th.Render("ui.text.inactive", text.Fit(f.Label, lw)) + "  "
 		}
 		switch {
+		case len(f.Toggles) > 0:
+			row += m.toggles(i, vw)
 		case len(f.Choices) > 0 && i == m.at:
 			row += m.th.Render("ui.menu.selected", text.Truncate(" "+f.Choices[m.choice[i]]+" ", vw))
 		case len(f.Choices) > 0:

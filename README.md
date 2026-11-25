@@ -25,7 +25,7 @@ One tab per component: theme, text, input, list, fuzzy, modal, palette and files
 | `kitty` | Kitty graphics escapes: transmit, unicode placeholders, placements, cell pixel size |
 | `termimg` | Encoder seam (`Kitty`, `Blocks` half blocks, `Blank`; `Choose` by mode), out-of-band `Queue`, decode, `Normalize`, resize and `Pack`, `Fit` to cells, `LRU`, `IDs`, `Circle`, `Cover` |
 | `termout` | One serialised terminal writer for Bubble Tea and image queues; holds output until the alt screen |
-| `mpv` | libmpv by dlopen, software-rendered frames; more properties followed as strings (`Observe`), more options (`Extra`) |
+| `mpv` | libmpv by dlopen; frames rendered on a GPU through a GL context with no window (libEGL by dlopen) and read back, by mpv's software renderer without one or with `Software`; decoding on the GPU; more properties followed as strings (`Observe`), more options (`Extra`) |
 | `player` | Video with sound in a cell rect: mpv frames as kitty images, through shared memory with `Shm`, controls, state; the frame `Sink` |
 | `mpris` | A player on the session bus (MPRIS, godbus): media keys, headset buttons, playerctl; `Set` the state, read `Commands`. The name is held while a track is set |
 | `awake` | Screensaver inhibit on the session bus (org.freedesktop.ScreenSaver, godbus) while video plays without a window; `Set(on)`, latest wins, never blocks |

@@ -5,6 +5,7 @@ package mpv
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"image"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +29,12 @@ func TestMissingLibrary(t *testing.T) {
 // testVideo writes a 64x48 2s mp4 with a tone.
 func testVideo(t *testing.T) string {
 	t.Helper()
+	return testClip(t, 2)
+}
+
+// testClip writes a 64x48 mp4 with a tone, secs long.
+func testClip(t *testing.T, secs int) string {
+	t.Helper()
 	if err := Available(); err != nil {
 		t.Skip(err)
 	}
@@ -36,8 +44,8 @@ func testVideo(t *testing.T) string {
 	}
 	out := filepath.Join(t.TempDir(), "clip.mp4")
 	cmd := exec.Command(ff, "-hide_banner", "-loglevel", "error",
-		"-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=2",
-		"-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+		"-f", "lavfi", "-i", fmt.Sprintf("testsrc=size=64x48:rate=10:duration=%d", secs),
+		"-f", "lavfi", "-i", fmt.Sprintf("sine=frequency=440:duration=%d", secs),
 		"-pix_fmt", "yuv420p", "-shortest", "-y", out)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("ffmpeg: %v %s", err, b)
@@ -355,5 +363,50 @@ func TestObservesTags(t *testing.T) {
 	}
 	if _, ok := pr["metadata/by-key/none"]; ok {
 		t.Errorf("absent tag has a value: %q", pr)
+	}
+}
+
+func TestSkipsSpans(t *testing.T) {
+	path := testClip(t, 8)
+	var mu sync.Mutex
+	var inside []time.Duration // positions seen in a span while it should skip
+	spans := []Span{{Start: 0, End: 1500 * time.Millisecond}, {Start: 3 * time.Second, End: 4500 * time.Millisecond},
+		{Start: 6 * time.Second, End: 7 * time.Second, Mute: true}}
+	var p *Player
+	check := true
+	p, err := New(Source{Path: path}, Options{AudioOutput: "null", Volume: 100, Speed: 2, Spans: spans,
+		OnChange: func() {
+			s := p.Status()
+			mu.Lock()
+			defer mu.Unlock()
+			// a frame or two in before the skip lands
+			if check && (s.Pos > 300*time.Millisecond && s.Pos < 1400*time.Millisecond ||
+				s.Pos > 3300*time.Millisecond && s.Pos < 4400*time.Millisecond) {
+				inside = append(inside, s.Pos)
+			}
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeWait(t, p)
+	waitFor(t, "two skips", func() bool { s := p.Status(); return s.Skips == 2 && s.Pos > 4500*time.Millisecond })
+	if s := p.Status(); s.Skipped != 1 {
+		t.Fatalf("skipped %d", s.Skipped)
+	}
+	waitFor(t, "muted span", func() bool { s := p.Status(); return s.Pos > 6100*time.Millisecond && s.Mute })
+	waitFor(t, "unmuted after", func() bool { s := p.Status(); return s.Pos > 7100*time.Millisecond && !s.Mute })
+	mu.Lock()
+	check = false
+	if len(inside) > 0 {
+		t.Errorf("played in skip spans at %v", inside)
+	}
+	mu.Unlock()
+	// a seek into a span plays it
+	p.Pause()
+	p.Seek(3200*time.Millisecond, true)
+	p.Play()
+	waitFor(t, "played through", func() bool { return p.Status().Pos > 4600*time.Millisecond })
+	if s := p.Status(); s.Skips != 2 {
+		t.Fatalf("skips %d after a seek into a span", s.Skips)
 	}
 }

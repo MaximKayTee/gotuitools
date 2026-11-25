@@ -85,7 +85,8 @@ func testVideo(t *testing.T) string {
 }
 
 // mpvThreads are the threads not named as the process: libmpv's and
-// ffmpeg's.
+// ffmpeg's. Not the CUDA driver's: one stays for the process once a
+// GPU has decoded.
 func mpvThreads(t *testing.T) []string {
 	t.Helper()
 	self, err := os.ReadFile("/proc/self/comm")
@@ -102,7 +103,7 @@ func mpvThreads(t *testing.T) []string {
 		if err != nil {
 			continue
 		}
-		if !bytes.Equal(b, self) {
+		if !bytes.Equal(b, self) && !bytes.HasPrefix(b, []byte("cuda")) {
 			out = append(out, strings.TrimSpace(string(b)))
 		}
 	}

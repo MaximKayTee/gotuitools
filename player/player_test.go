@@ -557,3 +557,37 @@ func TestSubs(t *testing.T) {
 		t.Fatalf("off carried %q", f.o.SubLang)
 	}
 }
+
+func TestSpans(t *testing.T) {
+	p, op, _ := newTest(t, Options{})
+	ctx := context.Background()
+	spans := []Span{{Start: time.Second, End: 2 * time.Second}}
+	// set before the session: given at open
+	p.SetSpans("/a.mp4", spans)
+	p.Play(ctx, file("/a.mp4"), 0, 0, 40, 12)
+	a := op.last(t)
+	if !slices.Equal(a.o.Spans, spans) {
+		t.Fatalf("open spans %+v", a.o.Spans)
+	}
+	// set during it: handed to the engine
+	a.took()
+	p.SetSpans("/a.mp4", nil)
+	if got := a.took(); !slices.Equal(got, []string{"spans 0"}) {
+		t.Fatalf("calls %q", got)
+	}
+	// another key's: not this session's, nor carried to the next
+	p.SetSpans("/x.mp4", spans)
+	if got := a.took(); len(got) != 0 {
+		t.Fatalf("calls %q", got)
+	}
+	p.Play(ctx, file("/b.mp4"), 0, 0, 40, 12)
+	if b := op.last(t); b.o.Spans != nil {
+		t.Fatalf("b spans %+v", b.o.Spans)
+	}
+	a.set(func(s *mpv.Status) {})
+	b := op.last(t)
+	b.set(func(s *mpv.Status) { s.Skips, s.Skipped = 2, 1 })
+	if st := p.State(); st.Skips != 2 || st.Skipped != 1 {
+		t.Fatalf("state %+v", st)
+	}
+}

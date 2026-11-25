@@ -1,7 +1,13 @@
 // Package mpv plays media through libmpv in process: libmpv is opened
-// with dlopen at runtime (cgo, linux), frames come from the software
-// render API into RGBA buffers. Without cgo, or off linux, Available
-// reports ErrNoLibmpv and New fails.
+// with dlopen at runtime (cgo, linux), frames come from its render API
+// into RGBA buffers. Without cgo, or off linux, Available reports
+// ErrNoLibmpv and New fails.
+//
+// Rendering: on a GPU, through a GL context with no window (libEGL by
+// dlopen, an EGL device or Mesa's surfaceless platform), each frame
+// read back; Renderer names the GPU. mpv's software renderer instead
+// without libEGL or a GPU's driver, with Options.Software, or once the
+// GPU has failed glFails frames running.
 //
 // Threads: an event goroutine folds mpv property changes into a cached
 // Status; a render goroutine waits for mpv's update callback, renders
@@ -95,9 +101,26 @@ type Options struct {
 	// "metadata/by-key/icy-title", "audio-codec-name". Their values are
 	// Status.Props.
 	Observe []string
+	// Software: frames from mpv's software renderer, never a GPU.
+	Software bool
 	// Extra are more mpv options, set after the others: {"vid", "no"}.
 	Extra [][2]string
+	// Spans are skipped or played muted; see Span.
+	Spans []Span
 }
+
+// Span is a stretch of the file to skip or play muted. Skip spans that
+// overlap or touch are one stretch: playback that runs into it goes on
+// from its end; a seek into it plays it. A mute span plays muted,
+// however it was reached.
+type Span struct {
+	Start, End time.Duration
+	Mute       bool
+}
+
+// spanTail is the end of a skip span that plays: a seek to the end can
+// land a frame short of it.
+const spanTail = 0.1
 
 // Status is the cached player state.
 type Status struct {
@@ -124,6 +147,9 @@ type Status struct {
 	// Props are the Options.Observe properties that have a value, by
 	// name. Not to be changed.
 	Props map[string]string
+	// Skips counts the spans skipped, Skipped is the index of the last
+	// one in Options.Spans or SetSpans; -1 none.
+	Skips, Skipped int
 }
 
 // Sub is a subtitle track.
@@ -164,6 +190,8 @@ const (
 	evShutdown       = 1
 	evEndFile        = 7
 	evFileLoaded     = 8
+	evSeek           = 20
+	evRestart        = 21 // playback restart: a seek finished
 	evPropertyChange = 22
 
 	fmtNone   = 0
@@ -247,6 +275,15 @@ type mpvState struct {
 	// values, replaced whole on a change.
 	extra []string
 	props map[string]string
+
+	spans []Span
+	// seeking: a seek runs; positions until playback restarts are not
+	// played ones.
+	seeking        bool
+	landed         float64 // where the last seek landed; -1 none
+	userMute       bool    // mute as set; a mute span mutes too
+	spanMute       bool
+	skips, skipped int
 }
 
 // ytdlRetries is how often a ytdl URL that failed before it loaded is
@@ -346,6 +383,76 @@ func (s *mpvState) applyExtra(e mpvEvent) bool {
 	return true
 }
 
+// follow takes an event after apply: seeks, and the position against
+// the spans. to is where to seek to skip a span, -1 none; remute: the
+// mute to send, muted(), changed.
+func (s *mpvState) follow(e mpvEvent) (to float64, remute bool) {
+	to = -1
+	switch {
+	case e.id == evSeek:
+		s.seeking = true
+		return to, false
+	case e.id == evRestart:
+		if s.seeking {
+			s.seeking, s.landed = false, s.pos
+		}
+		return to, false
+	case e.id != evPropertyChange || e.prop != propTimePos || e.format != fmtDouble || !s.loaded || s.seeking:
+		return to, false
+	}
+	pos := s.pos
+	mute := false
+	for i, sp := range s.spans {
+		start, end := sp.Start.Seconds(), sp.End.Seconds()
+		if pos < start || pos >= end {
+			continue
+		}
+		if sp.Mute {
+			mute = true
+			continue
+		}
+		if to >= 0 || pos >= end-spanTail {
+			continue
+		}
+		if lo, hi := s.stretch(start, end); s.landed < lo || s.landed >= hi {
+			to = hi
+			s.skips++
+			s.skipped = i
+		}
+	}
+	if to >= 0 {
+		s.pos, s.eof = to, false
+		return to, false
+	}
+	if mute != s.spanMute {
+		s.spanMute = mute
+		return to, true
+	}
+	return to, false
+}
+
+// stretch is the start and end of the skip spans that overlap or
+// touch start to end, and those that overlap or touch them.
+func (s *mpvState) stretch(start, end float64) (float64, float64) {
+	for range s.spans {
+		grew := false
+		for _, sp := range s.spans {
+			a, b := sp.Start.Seconds(), sp.End.Seconds()
+			if sp.Mute || b < start || a > end || (a >= start && b <= end) {
+				continue
+			}
+			start, end, grew = min(start, a), max(end, b), true
+		}
+		if !grew {
+			break
+		}
+	}
+	return start, end
+}
+
+// muted is the mute to send: as set, or in a mute span.
+func (s *mpvState) muted() bool { return s.userMute || s.spanMute }
+
 func (s *mpvState) status() Status {
 	st := Status{
 		Loaded: s.loaded,
@@ -361,6 +468,7 @@ func (s *mpvState) status() Status {
 		Sub:    s.sub,
 		Err:    s.err,
 		Props:  s.props,
+		Skips:  s.skips, Skipped: s.skipped,
 	}
 	if s.w > 0 && s.h > 0 {
 		st.Size = image.Pt(s.w, s.h)
@@ -429,9 +537,15 @@ func loopValue(on bool) string {
 
 func clampVolume(v float64) float64 { return min(max(v, 0), MaxVolume) }
 
-// optional are set before mpv_initialize, errors ignored: mpv's
-// built-in scripts, options of newer mpv versions.
+// optional are set before mpv_initialize and before optionList, errors
+// ignored: mpv's built-in scripts, options of newer mpv versions.
+// hwdec: decoding on the GPU, its frames kept there for a GPU renderer,
+// copied back for the software one; in software where no GPU decodes
+// the video. zimg-threads: the software renderer's scaler on the
+// render thread.
 var optional = [][2]string{
+	{"hwdec", "auto-safe,auto-copy-safe"},
+	{"zimg-threads", "1"},
 	{"load-stats-overlay", "no"},
 	{"load-console", "no"},
 	{"load-select", "no"},
@@ -456,7 +570,6 @@ func optionList(src Source, o Options) [][2]string {
 		{"input-default-bindings", "no"},
 		{"input-vo-keyboard", "no"},
 		{"vo", "libmpv"},
-		{"hwdec", "no"},
 		{"idle", "yes"},
 		{"keep-open", "yes"},
 		{"audio-display", "no"},

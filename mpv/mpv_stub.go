@@ -17,6 +17,7 @@ type Player struct{}
 func New(Source, Options) (*Player, error) { return nil, ErrNoLibmpv }
 
 func (*Player) Redraw()                            {}
+func (*Player) Renderer() string                   { return "" }
 func (*Player) Rendered() int                      { return 0 }
 func (*Player) Frame() (*image.RGBA, uint64, bool) { return nil, 0, false }
 func (*Player) Status() Status                     { return Status{} }
@@ -33,6 +34,7 @@ func (*Player) SetSpeed(float64)                   {}
 func (*Player) SetVolume(float64)                  {}
 func (*Player) SetMute(bool)                       {}
 func (*Player) SetSub(int)                         {}
+func (*Player) SetSpans([]Span)                    {}
 func (*Player) Close()                             {}
 
 // Done is closed.

@@ -1,8 +1,9 @@
 // Package player plays a video with sound inside a cell rect of the
-// terminal through libmpv in process (gotuitools/mpv): mpv's software
-// render API draws into an RGBA buffer of the fitted rect's pixels,
-// each frame goes out as raw RGB through a Sink under one image id,
-// zlib on. Sound through libmpv's own audio output. Targets are local
+// terminal through libmpv in process (gotuitools/mpv): mpv renders
+// into an RGBA buffer of the fitted rect's pixels, on a GPU where
+// there is one, in software otherwise or with Options.Software; each
+// frame goes out as raw RGB through a Sink under one image id, zlib
+// on. Sound through libmpv's own audio output. Targets are local
 // paths, fd://N pipes, direct media URLs with request headers, or page
 // URLs through mpv's ytdl_hook.
 //
@@ -92,8 +93,10 @@ type Options struct {
 	// video's language to the subtitle tracks; with YTDL.
 	AutoCaptions bool
 	// Shm: frames through shared memory while the terminal reads them.
-	Shm    bool
-	Logger *slog.Logger // discard
+	Shm bool
+	// Software: frames from mpv's software renderer, never a GPU.
+	Software bool
+	Logger   *slog.Logger // discard
 
 	open    func(mpv.Source, mpv.Options) (engine, error) // tests; mpv.New
 	every   time.Duration                                 // tests: Changes interval; changeEvery
@@ -115,6 +118,7 @@ type engine interface {
 	SetLoop(bool)
 	SetSpeed(float64)
 	SetSub(int)
+	SetSpans([]mpv.Span)
 	Rendered() int
 	Close()
 	Done() <-chan struct{}
@@ -142,8 +146,15 @@ type State struct {
 	Playing bool
 	// Sub is the ID of the subtitle track shown, a Subs ID; 0 none.
 	Sub int
-	Err error
+	// Skips counts the spans skipped this session, Skipped is the
+	// index of the last one in SetSpans; -1 none.
+	Skips, Skipped int
+	Err            error
 }
+
+// Span is a stretch of a video to skip or play muted: playback that
+// runs into a skip span goes on from its end; a seek into one plays it.
+type Span = mpv.Span
 
 // Sub is a subtitle track.
 type Sub = mpv.Sub
@@ -193,6 +204,9 @@ type Pane struct {
 	loop    bool
 	speed   float64
 	subLang string // language of the subtitles shown; "" none
+	// spans are SetSpans', for the session of spanKey
+	spanKey string
+	spans   []Span
 
 	shm atomic.Bool // frames through shared memory
 
@@ -306,11 +320,15 @@ func (p *Pane) Play(ctx context.Context, src Source, col, row, cols, rows int) e
 		s.sink.wait = p.o.shmWait
 	}
 	vol, mute, loop, speed, subLang := p.vol, p.mute, p.loop, p.speed, p.subLang
+	var spans []Span
+	if p.spanKey == key {
+		spans = p.spans
+	}
 	p.mu.Unlock()
 	eng, err := p.o.open(mpvSource(src), mpv.Options{
 		Loop: loop, Speed: speed, Mute: mute, Paused: src.Paused, Volume: float64(vol), AudioOutput: p.o.AudioOutput,
 		YTDL: p.o.YTDL, YTDLFormat: cmp.Or(src.Format, p.o.YTDLFormat), Start: src.Start,
-		AutoCaptions: p.o.AutoCaptions, SubLang: subLang,
+		AutoCaptions: p.o.AutoCaptions, SubLang: subLang, Spans: spans, Software: p.o.Software,
 		Size:     s.size(p.o.CellPx),
 		OnFrame:  s.poke,
 		OnChange: func() { p.changed(s) },
@@ -335,7 +353,11 @@ func (p *Pane) Play(ctx context.Context, src Source, col, row, cols, rows int) e
 	p.sess = s
 	p.mu.Unlock()
 	log := p.o.Logger.With("target", key)
-	log.Debug("mpv opened", "cols", cols, "rows", rows)
+	renderer := ""
+	if r, ok := eng.(interface{ Renderer() string }); ok {
+		renderer = r.Renderer()
+	}
+	log.Debug("mpv opened", "cols", cols, "rows", rows, "renderer", cmp.Or(renderer, "software"))
 	go p.write(s, eng, log)
 	go func() {
 		select {
@@ -669,11 +691,12 @@ func (p *Pane) State() State {
 	}
 	p.mu.Unlock()
 	if s == nil || eng == nil {
-		return State{Volume: vol, Muted: mute, Loop: loop, Speed: speed}
+		return State{Volume: vol, Muted: mute, Loop: loop, Speed: speed, Skipped: -1}
 	}
 	st := eng.Status()
 	return State{Target: s.key, Pos: st.Pos, Dur: st.Dur, Paused: st.Paused, Muted: mute,
-		Volume: vol, Loop: loop, Speed: speed, Loaded: st.Loaded, Playing: !ended, Sub: st.Sub, Err: st.Err}
+		Volume: vol, Loop: loop, Speed: speed, Loaded: st.Loaded, Playing: !ended, Sub: st.Sub,
+		Skips: st.Skips, Skipped: st.Skipped, Err: st.Err}
 }
 
 // Changes receives State after it changed: at once, then at most every
@@ -888,4 +911,23 @@ func (p *Pane) SetSub(id int) error {
 	eng.SetSub(id)
 	p.notify()
 	return nil
+}
+
+// SetSpans sets the spans of the source key: for its session, now or
+// the next one. They replace those set before, for any key.
+func (p *Pane) SetSpans(key string, spans []Span) {
+	if p == nil {
+		return
+	}
+	spans = slices.Clone(spans)
+	p.mu.Lock()
+	p.spanKey, p.spans = key, spans
+	var eng engine
+	if s := p.sess; s != nil && s.key == key {
+		eng = s.eng
+	}
+	p.mu.Unlock()
+	if eng != nil {
+		eng.SetSpans(spans)
+	}
 }
