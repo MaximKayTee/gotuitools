@@ -410,6 +410,23 @@ func (p *Player) command(async bool, args ...string) error {
 // send queues a command.
 func (p *Player) send(args ...string) { _ = p.command(true, args...) }
 
+// Command queues an mpv command, its name and arguments as mpv's
+// client API takes them: "loadfile", url, "append" plays url after what
+// plays, with no gap in the sound under gapless-audio. An error when
+// mpv does not take the command; what running it comes to is not
+// waited for.
+func (p *Player) Command(args ...string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return p.command(true, args...)
+}
+
+// SetProperty sets an mpv property or option by name while it plays,
+// its value as text: "af", "volume-gain". Not for what Player has a
+// method for: Status would not follow.
+func (p *Player) SetProperty(name, value string) { p.send("set", name, value) }
+
 // changed runs OnChange; time-pos at most every 100 ms.
 func (p *Player) changed(timePos bool) {
 	if p.opts.OnChange == nil {
