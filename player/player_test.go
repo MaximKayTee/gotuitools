@@ -502,7 +502,7 @@ func TestNilPane(t *testing.T) {
 	p.SetLoop(true)
 	p.SetSpeed(2)
 	if p.Playing() || p.Target() != "" || p.State() != (State{}) || p.Changes() != nil || p.Subs() != nil ||
-		!errors.Is(p.SetSub(1), ErrNotPlaying) || !errors.Is(p.Place(0, 0, 4, 4), ErrNotPlaying) {
+		!errors.Is(p.SetSub(1), ErrNotPlaying) || p.Audios() != nil || !errors.Is(p.SetAudio(1), ErrNotPlaying) || !errors.Is(p.Place(0, 0, 4, 4), ErrNotPlaying) {
 		t.Fatal("nil pane state")
 	}
 	for _, err := range []error{p.Toggle(), p.Pause(), p.Resume(), p.Seek(time.Second), p.SeekTo(0.5), p.Volume(5), p.ToggleMute()} {
@@ -556,6 +556,52 @@ func TestSubs(t *testing.T) {
 	if f = op.last(t); f.o.SubLang != "" {
 		t.Fatalf("off carried %q", f.o.SubLang)
 	}
+}
+
+func TestAudioAndLangs(t *testing.T) {
+	p, op, _ := newTest(t, Options{})
+	if err := p.SetAudio(1); !errors.Is(err, ErrNotPlaying) {
+		t.Fatalf("idle: %v", err)
+	}
+	p.SetLangs("ja, en", "en")
+	ctx := context.Background()
+	p.Play(ctx, file("/a.mkv"), 0, 0, 40, 12)
+	f := op.last(t)
+	if f.o.AudioLang != "ja, en" || f.o.SubLang != "en" {
+		t.Fatalf("prefs %q %q", f.o.AudioLang, f.o.SubLang)
+	}
+	audios := []Audio{{ID: 1, Lang: "jpn"}, {ID: 2, Lang: "eng", Title: "Commentary"}}
+	subs := []Sub{{ID: 1, Lang: "eng"}, {ID: 2, Lang: "spa"}}
+	f.set(func(s *mpv.Status) { s.Audios, s.Audio, s.Subs = audios, 1, subs })
+	if st := p.State(); !slices.Equal(p.Audios(), audios) || st.Audio != 1 {
+		t.Fatalf("audios %+v, state %+v", p.Audios(), st)
+	}
+	f.took()
+	if err := p.SetAudio(3); err == nil {
+		t.Fatal("track 3 set")
+	}
+	if err := p.SetAudio(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetSub(2); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.took(); !slices.Equal(got, []string{"audio 2", "sub 2"}) || p.State().Audio != 2 {
+		t.Fatalf("calls %q, state %+v", got, p.State())
+	}
+	// the picks come first in the session after
+	p.Play(ctx, file("/b.mkv"), 0, 0, 40, 12)
+	if f = op.last(t); f.o.AudioLang != "eng,ja, en" || f.o.SubLang != "spa,en" {
+		t.Fatalf("carried %q %q", f.o.AudioLang, f.o.SubLang)
+	}
+	// new prefs forget the picks
+	p.SetLangs("", "pt-BR")
+	p.Play(ctx, file("/c.mkv"), 0, 0, 40, 12)
+	if f = op.last(t); f.o.AudioLang != "" || f.o.SubLang != "pt-BR" {
+		t.Fatalf("after SetLangs %q %q", f.o.AudioLang, f.o.SubLang)
+	}
+	var nilPane *Pane
+	nilPane.SetLangs("ja", "en")
 }
 
 func TestSpans(t *testing.T) {

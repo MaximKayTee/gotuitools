@@ -79,9 +79,11 @@ type Options struct {
 	// AutoCaptions adds YouTube's auto-generated captions in the
 	// video's language to the subtitle tracks; with YTDL.
 	AutoCaptions bool
-	// SubLang is the language of the subtitle track shown at the
-	// start: slang; "" none.
-	SubLang string
+	// AudioLang and SubLang are the languages of the audio and
+	// subtitle tracks picked at the start, comma separated, first
+	// wanted first: alang and slang, each code followed by its primary
+	// subtag ("pt-BR" also "pt"); "" mpv's default.
+	AudioLang, SubLang string
 	// Start is the position playback starts at.
 	Start time.Duration
 	// Speed is the playback speed; 0 is 1.
@@ -136,12 +138,19 @@ type Status struct {
 	Loop   bool
 	// EOF: at the end, keep-open.
 	EOF bool
+	// Cached is where what is buffered ahead ends: playback runs to it
+	// without waiting on the source; 0 unknown.
+	Cached time.Duration
 	// Size is mpv's display size; zero until known.
 	Size image.Point
 	// Subs are the subtitle tracks, Sub the ID of the one shown; 0
 	// none. Not to be changed.
 	Subs []Sub
 	Sub  int
+	// Audios are the audio tracks, Audio the ID of the one playing; 0
+	// none. Not to be changed.
+	Audios []Audio
+	Audio  int
 	// Err: the file failed to play.
 	Err error
 	// Props are the Options.Observe properties that have a value, by
@@ -158,6 +167,13 @@ type Sub struct {
 	Lang string // "en", "pt-BR"; "" unknown
 	// Auto: auto-generated captions, Options.AutoCaptions.
 	Auto bool
+}
+
+// Audio is an audio track.
+type Audio struct {
+	ID    int
+	Lang  string // "ja", "jpn"; "" unknown
+	Title string // the track's name: "Commentary"; "" none
 }
 
 // Playing reports a loaded file running: not paused, not at the end.
@@ -218,6 +234,7 @@ const (
 	propDHeight
 	propEOF
 	propTrackList
+	propCacheTime
 	// propExtra and up: Options.Observe, in order.
 	propExtra propID = 1000
 )
@@ -238,6 +255,7 @@ var observed = []struct {
 	{propDHeight, "dheight", fmtInt64},
 	{propEOF, "eof-reached", fmtFlag},
 	{propTrackList, "track-list", fmtString},
+	{propCacheTime, "demuxer-cache-time", fmtDouble},
 }
 
 // mpvEvent is a flattened mpv_event.
@@ -266,8 +284,11 @@ type mpvState struct {
 	loop   bool
 	w, h   int
 	eof    bool
+	cached float64
 	subs   []Sub
 	sub    int
+	audios []Audio
+	audio  int
 	err    error
 	// retries left for a load that fails before the file loaded
 	retries int
@@ -345,12 +366,20 @@ func (s *mpvState) apply(e mpvEvent) bool {
 		s.h = int(e.i)
 	case propEOF:
 		s.eof = e.flag
-	case propTrackList:
-		subs, sub := parseSubs(e.str)
-		if sub == s.sub && slices.Equal(subs, s.subs) {
+	case propCacheTime:
+		if none {
+			e.d = 0
+		}
+		if e.d == s.cached {
 			return false
 		}
-		s.subs, s.sub = subs, sub
+		s.cached = e.d
+	case propTrackList:
+		subs, sub, audios, audio := parseTracks(e.str)
+		if sub == s.sub && audio == s.audio && slices.Equal(subs, s.subs) && slices.Equal(audios, s.audios) {
+			return false
+		}
+		s.subs, s.sub, s.audios, s.audio = subs, sub, audios, audio
 	default:
 		return s.applyExtra(e)
 	}
@@ -464,8 +493,11 @@ func (s *mpvState) status() Status {
 		Speed:  s.speed,
 		Loop:   s.loop,
 		EOF:    s.eof,
+		Cached: secs(s.cached),
 		Subs:   s.subs,
 		Sub:    s.sub,
+		Audios: s.audios,
+		Audio:  s.audio,
 		Err:    s.err,
 		Props:  s.props,
 		Skips:  s.skips, Skipped: s.skipped,
@@ -476,20 +508,32 @@ func (s *mpvState) status() Status {
 	return st
 }
 
-// slang is lang, then its primary subtag: "pt-BR,pt".
-func slang(lang string) string {
-	if i := strings.IndexAny(lang, "-_"); i > 0 {
-		return lang + "," + lang[:i]
+// langList is a comma separated list of languages as alang or slang:
+// each code, then its primary subtag, once: "pt-BR, en" is
+// "pt-BR,pt,en".
+func langList(list string) string {
+	var out []string
+	add := func(c string) {
+		if c != "" && !slices.ContainsFunc(out, func(s string) bool { return strings.EqualFold(s, c) }) {
+			out = append(out, c)
+		}
 	}
-	return lang
+	for code := range strings.SplitSeq(list, ",") {
+		code = strings.TrimSpace(code)
+		add(code)
+		if i := strings.IndexAny(code, "-_"); i > 0 {
+			add(code[:i])
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // autoTitle is the title ytdl-subs.lua gives the tracks it adds.
 const autoTitle = "auto"
 
-// parseSubs reads the subtitle tracks and the one selected from mpv's
-// track-list, as JSON.
-func parseSubs(list string) ([]Sub, int) {
+// parseTracks reads the subtitle and audio tracks and the ones
+// selected from mpv's track-list, as JSON.
+func parseTracks(list string) (subs []Sub, sub int, audios []Audio, audio int) {
 	var tracks []struct {
 		ID       int    `json:"id"`
 		Type     string `json:"type"`
@@ -498,20 +542,26 @@ func parseSubs(list string) ([]Sub, int) {
 		Selected bool   `json:"selected"`
 	}
 	if json.Unmarshal([]byte(list), &tracks) != nil {
-		return nil, 0
+		return nil, 0, nil, 0
 	}
-	var subs []Sub
-	sel := 0
 	for _, t := range tracks {
-		if t.Type != "sub" || t.ID <= 0 {
+		if t.ID <= 0 {
 			continue
 		}
-		subs = append(subs, Sub{ID: t.ID, Lang: t.Lang, Auto: t.Title == autoTitle})
-		if t.Selected {
-			sel = t.ID
+		switch t.Type {
+		case "sub":
+			subs = append(subs, Sub{ID: t.ID, Lang: t.Lang, Auto: t.Title == autoTitle})
+			if t.Selected {
+				sub = t.ID
+			}
+		case "audio":
+			audios = append(audios, Audio{ID: t.ID, Lang: t.Lang, Title: t.Title})
+			if t.Selected {
+				audio = t.ID
+			}
 		}
 	}
-	return subs, sel
+	return subs, sub, audios, audio
 }
 
 func secs(f float64) time.Duration {
@@ -602,8 +652,11 @@ func optionList(src Source, o Options) [][2]string {
 			opts = append(opts, [2]string{"scripts", strings.Join(scripts, string(filepath.ListSeparator))})
 		}
 	}
-	if o.SubLang != "" {
-		opts = append(opts, [2]string{"slang", slang(o.SubLang)})
+	if l := langList(o.AudioLang); l != "" {
+		opts = append(opts, [2]string{"alang", l})
+	}
+	if l := langList(o.SubLang); l != "" {
+		opts = append(opts, [2]string{"slang", l})
 	}
 	if src.Path == "" {
 		var fields []string

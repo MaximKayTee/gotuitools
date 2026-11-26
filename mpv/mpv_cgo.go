@@ -427,7 +427,8 @@ func (p *Player) Command(args ...string) error {
 // method for: Status would not follow.
 func (p *Player) SetProperty(name, value string) { p.send("set", name, value) }
 
-// changed runs OnChange; time-pos at most every 100 ms.
+// changed runs OnChange; time-pos and demuxer-cache-time at most every
+// 100 ms.
 func (p *Player) changed(timePos bool) {
 	if p.opts.OnChange == nil {
 		return
@@ -491,7 +492,7 @@ func (p *Player) eventLoop() {
 			C.tm_signal_poke(unsafe.Pointer(p.sig))
 		}
 		if changed {
-			p.changed(e.prop == propTimePos && e.id == evPropertyChange)
+			p.changed((e.prop == propTimePos || e.prop == propCacheTime) && e.id == evPropertyChange)
 		}
 	}
 }
@@ -851,6 +852,18 @@ func (p *Player) SetSub(id int) {
 		v = strconv.Itoa(id)
 	}
 	p.send("set", "sid", v)
+}
+
+// SetAudio plays the audio track id, a Status.Audios ID; 0 none.
+func (p *Player) SetAudio(id int) {
+	p.mu.Lock()
+	p.st.audio = id
+	p.mu.Unlock()
+	v := "no"
+	if id > 0 {
+		v = strconv.Itoa(id)
+	}
+	p.send("set", "aid", v)
 }
 
 // Close stops playback; teardown finishes on a goroutine, then Done

@@ -3,6 +3,7 @@ package mpv
 import (
 	"image"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -145,7 +146,8 @@ func TestStateSubs(t *testing.T) {
 	list := func(str string) mpvEvent {
 		return mpvEvent{id: evPropertyChange, prop: propTrackList, format: fmtString, str: str}
 	}
-	const tracks = `[{"id":1,"type":"video","selected":true},{"id":1,"type":"audio","lang":"en","selected":true},` +
+	const tracks = `[{"id":1,"type":"video","selected":true},{"id":1,"type":"audio","lang":"en","selected":false},` +
+		`{"id":2,"type":"audio","lang":"jpn","title":"Japanese","selected":true},` +
 		`{"id":1,"type":"sub","title":"German","lang":"de","selected":false,"external":true},` +
 		`{"id":2,"type":"sub","title":"auto","lang":"en","selected":true,"external":true},` +
 		`{"id":3,"type":"sub","selected":false}]`
@@ -156,10 +158,20 @@ func TestStateSubs(t *testing.T) {
 	if st := s.status(); !slices.Equal(st.Subs, want) || st.Sub != 2 {
 		t.Fatalf("subs %+v sub %d", st.Subs, st.Sub)
 	}
+	wantAudio := []Audio{{ID: 1, Lang: "en"}, {ID: 2, Lang: "jpn", Title: "Japanese"}}
+	if st := s.status(); !slices.Equal(st.Audios, wantAudio) || st.Audio != 2 {
+		t.Fatalf("audios %+v audio %d", st.Audios, st.Audio)
+	}
+	if !s.apply(list(strings.Replace(tracks, `"lang":"jpn","title":"Japanese","selected":true`, `"lang":"jpn","title":"Japanese","selected":false`, 1))) ||
+		s.status().Audio != 0 {
+		t.Fatalf("audio off: %+v", s.status())
+	}
+	s.apply(list(tracks))
 	if s.apply(list(tracks)) {
 		t.Fatal("same list: change")
 	}
-	if !s.apply(list(`[{"id":1,"type":"video","selected":true}]`)) || len(s.status().Subs) != 0 || s.status().Sub != 0 {
+	if !s.apply(list(`[{"id":1,"type":"video","selected":true}]`)) || len(s.status().Subs) != 0 || s.status().Sub != 0 ||
+		len(s.status().Audios) != 0 || s.status().Audio != 0 {
 		t.Fatalf("no subs: %+v", s.status())
 	}
 	if s.apply(list("not json")) {
@@ -188,8 +200,12 @@ func TestOptionListSubs(t *testing.T) {
 	if m["slang"] != "en" || m["scripts"] != wait {
 		t.Errorf("slang %q scripts %q", m["slang"], m["scripts"])
 	}
-	if m = get(Options{AutoCaptions: true}); m["scripts"] != "" || m["slang"] != "" {
+	if m = get(Options{AutoCaptions: true}); m["scripts"] != "" || m["slang"] != "" || m["alang"] != "" {
 		t.Errorf("no ytdl: %v", m)
+	}
+	m = get(Options{AudioLang: " ja , en-US,EN", SubLang: "pt-BR,pt_PT, ,en"})
+	if m["alang"] != "ja,en-US,en" || m["slang"] != "pt-BR,pt,pt_PT,en" {
+		t.Errorf("lists: alang %q slang %q", m["alang"], m["slang"])
 	}
 }
 
@@ -307,5 +323,21 @@ func TestSpans(t *testing.T) {
 	s.userMute = true
 	if !s.muted() {
 		t.Fatal("set mute lost")
+	}
+}
+
+func TestStateCached(t *testing.T) {
+	var s mpvState
+	ev := func(d float64, format int) mpvEvent {
+		return mpvEvent{id: evPropertyChange, prop: propCacheTime, format: format, d: d}
+	}
+	if !s.apply(ev(42.5, fmtDouble)) || s.status().Cached != 42500*time.Millisecond {
+		t.Fatalf("cached %v", s.status().Cached)
+	}
+	if s.apply(ev(42.5, fmtDouble)) {
+		t.Fatal("same: change")
+	}
+	if !s.apply(ev(0, fmtNone)) || s.status().Cached != 0 {
+		t.Fatalf("none: %v", s.status().Cached)
 	}
 }

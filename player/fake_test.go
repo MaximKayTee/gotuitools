@@ -130,6 +130,11 @@ func (f *fakeEngine) SetSub(id int) {
 	f.set(func(s *mpv.Status) { s.Sub = id })
 }
 
+func (f *fakeEngine) SetAudio(id int) {
+	f.call("audio " + strconv.Itoa(id))
+	f.set(func(s *mpv.Status) { s.Audio = id })
+}
+
 func (f *fakeEngine) SetSpans(spans []mpv.Span) {
 	f.call("spans " + strconv.Itoa(len(spans)))
 }

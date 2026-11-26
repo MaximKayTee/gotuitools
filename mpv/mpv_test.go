@@ -208,6 +208,7 @@ func TestStreamsWithHeader(t *testing.T) {
 	if p.Status().Playing() {
 		t.Fatal("Paused option ignored")
 	}
+	waitFor(t, "cached", func() bool { return p.Status().Cached > time.Second })
 }
 
 // A ytdl URL that fails before it loaded is loaded again, ytdlRetries
@@ -408,5 +409,47 @@ func TestSkipsSpans(t *testing.T) {
 	waitFor(t, "played through", func() bool { return p.Status().Pos > 4600*time.Millisecond })
 	if s := p.Status(); s.Skips != 2 {
 		t.Fatalf("skips %d after a seek into a span", s.Skips)
+	}
+}
+
+// TestPicksAudioByLang: alang "ja" picks the track tagged jpn over the
+// default English one; SetAudio switches.
+func TestPicksAudioByLang(t *testing.T) {
+	if err := Available(); err != nil {
+		t.Skip(err)
+	}
+	ff, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	out := filepath.Join(t.TempDir(), "dual.mkv")
+	cmd := exec.Command(ff, "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=2",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+		"-f", "lavfi", "-i", "sine=frequency=660:duration=2",
+		"-map", "0", "-map", "1", "-map", "2", "-pix_fmt", "yuv420p", "-c:a", "flac",
+		"-metadata:s:a:0", "language=eng", "-metadata:s:a:1", "language=jpn", "-metadata:s:a:1", "title=Japanese",
+		"-disposition:a:0", "default", "-disposition:a:1", "0", "-y", out)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg: %v %s", err, b)
+	}
+	for _, c := range []struct {
+		lang string
+		want int
+	}{{"", 1}, {"ja", 2}, {"fr, jpn", 2}, {"en", 1}} {
+		p, err := New(Source{Path: out}, Options{AudioOutput: "null", Paused: true, AudioLang: c.lang})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "audio tracks", func() bool { return len(p.Status().Audios) == 2 && p.Status().Audio != 0 })
+		st := p.Status()
+		if st.Audio != c.want || st.Audios[1] != (Audio{ID: 2, Lang: "jpn", Title: "Japanese"}) {
+			t.Errorf("alang %q: audio %d of %+v", c.lang, st.Audio, st.Audios)
+		}
+		if c.lang == "" {
+			p.SetAudio(2)
+			waitFor(t, "switch", func() bool { return p.Status().Audio == 2 })
+		}
+		closeWait(t, p)
 	}
 }

@@ -118,6 +118,7 @@ type engine interface {
 	SetLoop(bool)
 	SetSpeed(float64)
 	SetSub(int)
+	SetAudio(int)
 	SetSpans([]mpv.Span)
 	Rendered() int
 	Close()
@@ -141,11 +142,15 @@ type State struct {
 	Loop          bool
 	Speed         float64 // 1 normal
 	Loaded        bool
+	// Cached is where what is buffered ahead ends; 0 unknown.
+	Cached time.Duration
 	// Playing: a session runs; false after the end, Stop, or before
 	// Play.
 	Playing bool
 	// Sub is the ID of the subtitle track shown, a Subs ID; 0 none.
 	Sub int
+	// Audio is the ID of the audio track playing, an Audios ID; 0 none.
+	Audio int
 	// Skips counts the spans skipped this session, Skipped is the
 	// index of the last one in SetSpans; -1 none.
 	Skips, Skipped int
@@ -158,6 +163,9 @@ type Span = mpv.Span
 
 // Sub is a subtitle track.
 type Sub = mpv.Sub
+
+// Audio is an audio track.
+type Audio = mpv.Audio
 
 // Source is what to play: Target is a local path or a URL, Headers
 // its request headers ("Name: value"). Key names the session so a
@@ -197,13 +205,17 @@ func mpvSource(src Source) mpv.Source {
 type Pane struct {
 	o Options
 
-	mu      sync.Mutex // sess, vol, mute, loop, speed, subLang; session done, ended, eng
+	mu      sync.Mutex // sess, vol, mute, loop, speed, langs; session done, ended, eng
 	sess    *session
 	vol     int
 	mute    bool
 	loop    bool
 	speed   float64
-	subLang string // language of the subtitles shown; "" none
+	subLang string // language of the subtitles picked; "" none
+	// audioLang is the language of the audio track picked; "" none
+	audioLang string
+	// audioPref and subPref are SetLangs'
+	audioPref, subPref string
 	// spans are SetSpans', for the session of spanKey
 	spanKey string
 	spans   []Span
@@ -319,7 +331,8 @@ func (p *Pane) Play(ctx context.Context, src Source, col, row, cols, rows int) e
 	if p.o.shmWait > 0 {
 		s.sink.wait = p.o.shmWait
 	}
-	vol, mute, loop, speed, subLang := p.vol, p.mute, p.loop, p.speed, p.subLang
+	vol, mute, loop, speed := p.vol, p.mute, p.loop, p.speed
+	audioLang, subLang := langs(p.audioLang, p.audioPref), langs(p.subLang, p.subPref)
 	var spans []Span
 	if p.spanKey == key {
 		spans = p.spans
@@ -328,7 +341,7 @@ func (p *Pane) Play(ctx context.Context, src Source, col, row, cols, rows int) e
 	eng, err := p.o.open(mpvSource(src), mpv.Options{
 		Loop: loop, Speed: speed, Mute: mute, Paused: src.Paused, Volume: float64(vol), AudioOutput: p.o.AudioOutput,
 		YTDL: p.o.YTDL, YTDLFormat: cmp.Or(src.Format, p.o.YTDLFormat), Start: src.Start,
-		AutoCaptions: p.o.AutoCaptions, SubLang: subLang, Spans: spans, Software: p.o.Software,
+		AutoCaptions: p.o.AutoCaptions, AudioLang: audioLang, SubLang: subLang, Spans: spans, Software: p.o.Software,
 		Size:     s.size(p.o.CellPx),
 		OnFrame:  s.poke,
 		OnChange: func() { p.changed(s) },
@@ -695,7 +708,7 @@ func (p *Pane) State() State {
 	}
 	st := eng.Status()
 	return State{Target: s.key, Pos: st.Pos, Dur: st.Dur, Paused: st.Paused, Muted: mute,
-		Volume: vol, Loop: loop, Speed: speed, Loaded: st.Loaded, Playing: !ended, Sub: st.Sub,
+		Volume: vol, Loop: loop, Speed: speed, Loaded: st.Loaded, Cached: st.Cached, Playing: !ended, Sub: st.Sub, Audio: st.Audio,
 		Skips: st.Skips, Skipped: st.Skipped, Err: st.Err}
 }
 
@@ -911,6 +924,57 @@ func (p *Pane) SetSub(id int) error {
 	eng.SetSub(id)
 	p.notify()
 	return nil
+}
+
+// Audios are the open session's audio tracks. Not to be changed.
+func (p *Pane) Audios() []Audio {
+	eng := p.open()
+	if eng == nil {
+		return nil
+	}
+	return eng.Status().Audios
+}
+
+// SetAudio plays the audio track id, an Audios ID. Its language comes
+// first in the sessions after. ErrNotPlaying without an open session.
+func (p *Pane) SetAudio(id int) error {
+	eng := p.open()
+	if eng == nil {
+		return ErrNotPlaying
+	}
+	audios := eng.Status().Audios
+	i := slices.IndexFunc(audios, func(a Audio) bool { return a.ID == id })
+	if i < 0 {
+		return fmt.Errorf("player: no audio track %d", id)
+	}
+	p.mu.Lock()
+	p.audioLang = audios[i].Lang
+	p.mu.Unlock()
+	eng.SetAudio(id)
+	p.notify()
+	return nil
+}
+
+// SetLangs sets the languages of the audio and subtitle tracks picked
+// at the start of each session after, comma separated, first wanted
+// first ("ja, en"); "" mpv's default. The tracks picked with SetAudio
+// and SetSub before are forgotten.
+func (p *Pane) SetLangs(audio, sub string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.audioPref, p.subPref = audio, sub
+	p.audioLang, p.subLang = "", ""
+	p.mu.Unlock()
+}
+
+// langs is the language picked, then the ones preferred.
+func langs(picked, pref string) string {
+	if picked == "" || pref == "" {
+		return picked + pref
+	}
+	return picked + "," + pref
 }
 
 // SetSpans sets the spans of the source key: for its session, now or
