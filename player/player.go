@@ -32,8 +32,9 @@
 // sessions. Controls change State at once; Changes delivers it at most
 // every 250 ms.
 //
-// Stop deletes the image and closes the libmpv handle on a goroutine;
-// Wait blocks until every closed handle is destroyed.
+// Stop deletes the image, pauses, so the sound stops at once, and
+// closes the libmpv handle on a goroutine; Wait blocks until every
+// closed handle is destroyed.
 //
 // Output should be the termout.Writer the TUI renders through.
 package player

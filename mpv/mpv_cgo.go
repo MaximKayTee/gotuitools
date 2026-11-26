@@ -293,6 +293,7 @@ type Player struct {
 	lastChange time.Time
 
 	stop       chan struct{}
+	renderStop chan struct{} // closed once the video output is gone
 	renderDone chan struct{}
 	eventDone  chan struct{}
 	done       chan struct{}
@@ -351,7 +352,7 @@ func New(src Source, o Options) (*Player, error) {
 	p := &Player{
 		h: h, sig: C.tm_signal_new(), opts: o, target: src.target(),
 		latest: -1, shown: -1,
-		stop: make(chan struct{}), renderDone: make(chan struct{}), eventDone: make(chan struct{}), done: make(chan struct{}),
+		stop: make(chan struct{}), renderStop: make(chan struct{}), renderDone: make(chan struct{}), eventDone: make(chan struct{}), done: make(chan struct{}),
 	}
 	p.st = mpvState{chapter: -1, paused: o.Paused, volume: o.Volume, mute: o.Mute, userMute: o.Mute, speed: 1, loop: o.Loop, extra: o.Observe,
 		spans: slices.Clone(o.Spans), landed: -1, skipped: -1}
@@ -382,6 +383,11 @@ func (p *Player) command(async bool, args ...string) error {
 	if p.closed.Load() {
 		return nil
 	}
+	return p.run(async, args...)
+}
+
+// run runs an mpv command on the handle, hmu held.
+func (p *Player) run(async bool, args ...string) error {
 	n := len(args) + 1
 	arr := (**C.char)(C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0)))))
 	defer C.free(unsafe.Pointer(arr))
@@ -620,7 +626,7 @@ func (p *Player) renderLoop(created chan<- C.int) {
 	for {
 		C.tm_signal_wait(p.sig, 100)
 		select {
-		case <-p.stop:
+		case <-p.renderStop:
 			return
 		default:
 		}
@@ -871,14 +877,21 @@ func (p *Player) SetAudio(id int) {
 	p.send("set", "aid", v)
 }
 
-// Close stops playback; teardown finishes on a goroutine, then Done
-// closes. Idempotent.
+// Close pauses, so the sound stops at once, and tears down on a
+// goroutine; then Done closes. Idempotent.
 func (p *Player) Close() {
 	p.closeOnce.Do(func() {
+		p.send("set", "pause", "yes")
 		p.closed.Store(true)
 		close(p.stop)
 		go func() {
 			defer close(p.done)
+			// the video output goes while its frames are still taken: one
+			// left untaken holds mpv 200 ms
+			p.hmu.RLock()
+			_ = p.run(false, "set", "vid", "no")
+			p.hmu.RUnlock()
+			close(p.renderStop)
 			C.tm_signal_poke(unsafe.Pointer(p.sig))
 			<-p.renderDone // the render context goes first, as mpv requires
 			C.tm_wakeup(p.h)
