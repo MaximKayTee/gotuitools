@@ -119,6 +119,7 @@ type engine interface {
 	SetSpeed(float64)
 	SetSub(int)
 	SetAudio(int)
+	AddChapter(int)
 	SetSpans([]mpv.Span)
 	Rendered() int
 	Close()
@@ -151,6 +152,9 @@ type State struct {
 	Sub int
 	// Audio is the ID of the audio track playing, an Audios ID; 0 none.
 	Audio int
+	// Chapter is the index in Chapters of the one playing; -1 before
+	// the first or none.
+	Chapter int
 	// Skips counts the spans skipped this session, Skipped is the
 	// index of the last one in SetSpans; -1 none.
 	Skips, Skipped int
@@ -166,6 +170,9 @@ type Sub = mpv.Sub
 
 // Audio is an audio track.
 type Audio = mpv.Audio
+
+// Chapter is a chapter of a file.
+type Chapter = mpv.Chapter
 
 // Source is what to play: Target is a local path or a URL, Headers
 // its request headers ("Name: value"). Key names the session so a
@@ -212,6 +219,7 @@ type Pane struct {
 	loop    bool
 	speed   float64
 	subLang string // language of the subtitles picked; "" none
+	subOff  bool   // subtitles turned off: none in the sessions after
 	// audioLang is the language of the audio track picked; "" none
 	audioLang string
 	// audioPref and subPref are SetLangs'
@@ -332,7 +340,7 @@ func (p *Pane) Play(ctx context.Context, src Source, col, row, cols, rows int) e
 		s.sink.wait = p.o.shmWait
 	}
 	vol, mute, loop, speed := p.vol, p.mute, p.loop, p.speed
-	audioLang, subLang := langs(p.audioLang, p.audioPref), langs(p.subLang, p.subPref)
+	audioLang, subLang, subOff := langs(p.audioLang, p.audioPref), langs(p.subLang, p.subPref), p.subOff
 	var spans []Span
 	if p.spanKey == key {
 		spans = p.spans
@@ -341,7 +349,7 @@ func (p *Pane) Play(ctx context.Context, src Source, col, row, cols, rows int) e
 	eng, err := p.o.open(mpvSource(src), mpv.Options{
 		Loop: loop, Speed: speed, Mute: mute, Paused: src.Paused, Volume: float64(vol), AudioOutput: p.o.AudioOutput,
 		YTDL: p.o.YTDL, YTDLFormat: cmp.Or(src.Format, p.o.YTDLFormat), Start: src.Start,
-		AutoCaptions: p.o.AutoCaptions, AudioLang: audioLang, SubLang: subLang, Spans: spans, Software: p.o.Software,
+		AutoCaptions: p.o.AutoCaptions, AudioLang: audioLang, SubLang: subLang, SubOff: subOff, Spans: spans, Software: p.o.Software,
 		Size:     s.size(p.o.CellPx),
 		OnFrame:  s.poke,
 		OnChange: func() { p.changed(s) },
@@ -704,11 +712,11 @@ func (p *Pane) State() State {
 	}
 	p.mu.Unlock()
 	if s == nil || eng == nil {
-		return State{Volume: vol, Muted: mute, Loop: loop, Speed: speed, Skipped: -1}
+		return State{Volume: vol, Muted: mute, Loop: loop, Speed: speed, Skipped: -1, Chapter: -1}
 	}
 	st := eng.Status()
 	return State{Target: s.key, Pos: st.Pos, Dur: st.Dur, Paused: st.Paused, Muted: mute,
-		Volume: vol, Loop: loop, Speed: speed, Loaded: st.Loaded, Cached: st.Cached, Playing: !ended, Sub: st.Sub, Audio: st.Audio,
+		Volume: vol, Loop: loop, Speed: speed, Loaded: st.Loaded, Cached: st.Cached, Playing: !ended, Sub: st.Sub, Audio: st.Audio, Chapter: st.Chapter,
 		Skips: st.Skips, Skipped: st.Skipped, Err: st.Err}
 }
 
@@ -902,8 +910,9 @@ func (p *Pane) Subs() []Sub {
 }
 
 // SetSub shows the subtitle track id, a Subs ID; 0 none. Its language
-// is shown in the sessions after too. ErrNotPlaying without an open
-// session.
+// is shown in the sessions after too; 0 turns them off for the sessions
+// after, until a track is set or SetLangs. ErrNotPlaying without an
+// open session.
 func (p *Pane) SetSub(id int) error {
 	eng := p.open()
 	if eng == nil {
@@ -919,7 +928,7 @@ func (p *Pane) SetSub(id int) error {
 		lang = subs[i].Lang
 	}
 	p.mu.Lock()
-	p.subLang = lang
+	p.subLang, p.subOff = lang, id == 0
 	p.mu.Unlock()
 	eng.SetSub(id)
 	p.notify()
@@ -958,15 +967,37 @@ func (p *Pane) SetAudio(id int) error {
 // SetLangs sets the languages of the audio and subtitle tracks picked
 // at the start of each session after, comma separated, first wanted
 // first ("ja, en"); "" mpv's default. The tracks picked with SetAudio
-// and SetSub before are forgotten.
+// and SetSub before are forgotten, subtitles turned off too.
 func (p *Pane) SetLangs(audio, sub string) {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
 	p.audioPref, p.subPref = audio, sub
-	p.audioLang, p.subLang = "", ""
+	p.audioLang, p.subLang, p.subOff = "", "", false
 	p.mu.Unlock()
+}
+
+// Chapters are the open session's chapters, by start. Not to be
+// changed.
+func (p *Pane) Chapters() []Chapter {
+	eng := p.open()
+	if eng == nil {
+		return nil
+	}
+	return eng.Status().Chapters
+}
+
+// AddChapter jumps by d chapters: 1 the next, -1 the start of the one
+// playing or the one before near its start; past the last, the end.
+// ErrNotPlaying without an open session.
+func (p *Pane) AddChapter(d int) error {
+	eng := p.open()
+	if eng == nil {
+		return ErrNotPlaying
+	}
+	eng.AddChapter(d)
+	return nil
 }
 
 // langs is the language picked, then the ones preferred.

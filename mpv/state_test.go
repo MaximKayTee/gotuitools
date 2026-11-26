@@ -341,3 +341,40 @@ func TestStateCached(t *testing.T) {
 		t.Fatalf("none: %v", s.status().Cached)
 	}
 }
+
+func TestStateChapters(t *testing.T) {
+	s := mpvState{chapter: -1}
+	list := mpvEvent{id: evPropertyChange, prop: propChapterList, format: fmtString,
+		str: `[{"title":"Opening","time":0},{"title":"Part A","time":90.5},{"time":1300}]`}
+	at := func(i int64, format int) mpvEvent {
+		return mpvEvent{id: evPropertyChange, prop: propChapter, format: format, i: i}
+	}
+	if st := s.status(); st.Chapters != nil || st.Chapter != -1 {
+		t.Fatalf("none: %+v", st)
+	}
+	if !s.apply(list) || s.apply(list) {
+		t.Fatal("list: change once")
+	}
+	want := []Chapter{{Title: "Opening"}, {Title: "Part A", Start: 90500 * time.Millisecond}, {Start: 1300 * time.Second}}
+	if st := s.status(); !slices.Equal(st.Chapters, want) || st.Chapter != -1 {
+		t.Fatalf("chapters %+v at %d", st.Chapters, st.Chapter)
+	}
+	if !s.apply(at(1, fmtInt64)) || s.status().Chapter != 1 || s.apply(at(1, fmtInt64)) {
+		t.Fatalf("at 1: %d", s.status().Chapter)
+	}
+	if !s.apply(at(0, fmtNone)) || s.status().Chapter != -1 {
+		t.Fatalf("none: %d", s.status().Chapter)
+	}
+	if !s.apply(mpvEvent{id: evPropertyChange, prop: propChapterList, format: fmtString, str: "[]"}) || s.status().Chapters != nil {
+		t.Fatalf("emptied: %+v", s.status())
+	}
+}
+
+func TestOptionSubOff(t *testing.T) {
+	has := func(o Options) bool {
+		return slices.Contains(optionList(Source{URL: "https://x"}, o), [2]string{"sid", "no"})
+	}
+	if has(Options{SubLang: "en"}) || !has(Options{SubLang: "en", SubOff: true}) {
+		t.Error("sid=no only with SubOff")
+	}
+}

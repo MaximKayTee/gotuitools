@@ -84,6 +84,8 @@ type Options struct {
 	// wanted first: alang and slang, each code followed by its primary
 	// subtag ("pt-BR" also "pt"); "" mpv's default.
 	AudioLang, SubLang string
+	// SubOff: no subtitles at the start, whatever SubLang says.
+	SubOff bool
 	// Start is the position playback starts at.
 	Start time.Duration
 	// Speed is the playback speed; 0 is 1.
@@ -151,6 +153,10 @@ type Status struct {
 	// none. Not to be changed.
 	Audios []Audio
 	Audio  int
+	// Chapters are the file's chapters, by start; Chapter the index of
+	// the one playing, -1 before the first or none. Not to be changed.
+	Chapters []Chapter
+	Chapter  int
 	// Err: the file failed to play.
 	Err error
 	// Props are the Options.Observe properties that have a value, by
@@ -174,6 +180,12 @@ type Audio struct {
 	ID    int
 	Lang  string // "ja", "jpn"; "" unknown
 	Title string // the track's name: "Commentary"; "" none
+}
+
+// Chapter is a chapter of a file.
+type Chapter struct {
+	Title string // "" none
+	Start time.Duration
 }
 
 // Playing reports a loaded file running: not paused, not at the end.
@@ -235,6 +247,8 @@ const (
 	propEOF
 	propTrackList
 	propCacheTime
+	propChapterList
+	propChapter
 	// propExtra and up: Options.Observe, in order.
 	propExtra propID = 1000
 )
@@ -256,6 +270,8 @@ var observed = []struct {
 	{propEOF, "eof-reached", fmtFlag},
 	{propTrackList, "track-list", fmtString},
 	{propCacheTime, "demuxer-cache-time", fmtDouble},
+	{propChapterList, "chapter-list", fmtString},
+	{propChapter, "chapter", fmtInt64},
 }
 
 // mpvEvent is a flattened mpv_event.
@@ -289,7 +305,10 @@ type mpvState struct {
 	sub    int
 	audios []Audio
 	audio  int
-	err    error
+	// chapters as mpv lists them; chapter playing, -1 none
+	chapters []Chapter
+	chapter  int
+	err      error
 	// retries left for a load that fails before the file loaded
 	retries int
 	// extra names the Options.Observe properties; props holds their
@@ -366,6 +385,21 @@ func (s *mpvState) apply(e mpvEvent) bool {
 		s.h = int(e.i)
 	case propEOF:
 		s.eof = e.flag
+	case propChapterList:
+		chapters := parseChapters(e.str)
+		if slices.Equal(chapters, s.chapters) {
+			return false
+		}
+		s.chapters = chapters
+	case propChapter:
+		c := int(e.i)
+		if none {
+			c = -1
+		}
+		if c == s.chapter {
+			return false
+		}
+		s.chapter = c
 	case propCacheTime:
 		if none {
 			e.d = 0
@@ -484,26 +518,30 @@ func (s *mpvState) muted() bool { return s.userMute || s.spanMute }
 
 func (s *mpvState) status() Status {
 	st := Status{
-		Loaded: s.loaded,
-		Pos:    secs(s.pos),
-		Dur:    secs(s.dur),
-		Paused: s.paused,
-		Volume: s.volume,
-		Mute:   s.mute,
-		Speed:  s.speed,
-		Loop:   s.loop,
-		EOF:    s.eof,
-		Cached: secs(s.cached),
-		Subs:   s.subs,
-		Sub:    s.sub,
-		Audios: s.audios,
-		Audio:  s.audio,
-		Err:    s.err,
-		Props:  s.props,
-		Skips:  s.skips, Skipped: s.skipped,
+		Loaded:  s.loaded,
+		Pos:     secs(s.pos),
+		Dur:     secs(s.dur),
+		Paused:  s.paused,
+		Volume:  s.volume,
+		Mute:    s.mute,
+		Speed:   s.speed,
+		Loop:    s.loop,
+		EOF:     s.eof,
+		Cached:  secs(s.cached),
+		Subs:    s.subs,
+		Sub:     s.sub,
+		Audios:  s.audios,
+		Audio:   s.audio,
+		Chapter: -1,
+		Err:     s.err,
+		Props:   s.props,
+		Skips:   s.skips, Skipped: s.skipped,
 	}
 	if s.w > 0 && s.h > 0 {
 		st.Size = image.Pt(s.w, s.h)
+	}
+	if len(s.chapters) > 0 {
+		st.Chapters, st.Chapter = s.chapters, min(s.chapter, len(s.chapters)-1)
 	}
 	return st
 }
@@ -530,6 +568,22 @@ func langList(list string) string {
 
 // autoTitle is the title ytdl-subs.lua gives the tracks it adds.
 const autoTitle = "auto"
+
+// parseChapters reads mpv's chapter-list, as JSON.
+func parseChapters(list string) []Chapter {
+	var raw []struct {
+		Title string  `json:"title"`
+		Time  float64 `json:"time"`
+	}
+	if json.Unmarshal([]byte(list), &raw) != nil || len(raw) == 0 {
+		return nil
+	}
+	chapters := make([]Chapter, len(raw))
+	for i, c := range raw {
+		chapters[i] = Chapter{Title: c.Title, Start: secs(c.Time)}
+	}
+	return chapters
+}
 
 // parseTracks reads the subtitle and audio tracks and the ones
 // selected from mpv's track-list, as JSON.
@@ -657,6 +711,9 @@ func optionList(src Source, o Options) [][2]string {
 	}
 	if l := langList(o.SubLang); l != "" {
 		opts = append(opts, [2]string{"slang", l})
+	}
+	if o.SubOff {
+		opts = append(opts, [2]string{"sid", "no"})
 	}
 	if src.Path == "" {
 		var fields []string

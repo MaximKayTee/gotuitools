@@ -553,8 +553,46 @@ func TestSubs(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Play(ctx, file("/c.mp4"), 0, 0, 40, 12)
-	if f = op.last(t); f.o.SubLang != "" {
-		t.Fatalf("off carried %q", f.o.SubLang)
+	if f = op.last(t); f.o.SubLang != "" || !f.o.SubOff {
+		t.Fatalf("off carried %q %v", f.o.SubLang, f.o.SubOff)
+	}
+	// until a track is set
+	f.set(func(s *mpv.Status) { s.Subs = subs })
+	if err := p.SetSub(1); err != nil {
+		t.Fatal(err)
+	}
+	p.Play(ctx, file("/d.mp4"), 0, 0, 40, 12)
+	if f = op.last(t); f.o.SubLang != "de" || f.o.SubOff {
+		t.Fatalf("on again %q %v", f.o.SubLang, f.o.SubOff)
+	}
+	// or new languages
+	f.set(func(s *mpv.Status) { s.Subs = subs })
+	p.SetSub(0)
+	p.SetLangs("", "en")
+	p.Play(ctx, file("/e.mp4"), 0, 0, 40, 12)
+	if f = op.last(t); f.o.SubLang != "en" || f.o.SubOff {
+		t.Fatalf("after SetLangs %q %v", f.o.SubLang, f.o.SubOff)
+	}
+}
+
+func TestChapters(t *testing.T) {
+	p, op, _ := newTest(t, Options{})
+	if p.Chapters() != nil || !errors.Is(p.AddChapter(1), ErrNotPlaying) || p.State().Chapter != -1 {
+		t.Fatal("idle chapters")
+	}
+	p.Play(context.Background(), file("/a.mkv"), 0, 0, 40, 12)
+	f := op.last(t)
+	chapters := []Chapter{{Title: "Opening", Start: 0}, {Title: "Part A", Start: 90 * time.Second}}
+	f.set(func(s *mpv.Status) { s.Chapters, s.Chapter = chapters, 1 })
+	if !slices.Equal(p.Chapters(), chapters) || p.State().Chapter != 1 {
+		t.Fatalf("chapters %+v, state %+v", p.Chapters(), p.State())
+	}
+	f.took()
+	if err := p.AddChapter(-1); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.took(); !slices.Equal(got, []string{"chapter -1"}) {
+		t.Fatalf("calls %q", got)
 	}
 }
 

@@ -353,7 +353,7 @@ func New(src Source, o Options) (*Player, error) {
 		latest: -1, shown: -1,
 		stop: make(chan struct{}), renderDone: make(chan struct{}), eventDone: make(chan struct{}), done: make(chan struct{}),
 	}
-	p.st = mpvState{paused: o.Paused, volume: o.Volume, mute: o.Mute, userMute: o.Mute, speed: 1, loop: o.Loop, extra: o.Observe,
+	p.st = mpvState{chapter: -1, paused: o.Paused, volume: o.Volume, mute: o.Mute, userMute: o.Mute, speed: 1, loop: o.Loop, extra: o.Observe,
 		spans: slices.Clone(o.Spans), landed: -1, skipped: -1}
 	if o.YTDL && src.Path == "" {
 		p.st.retries = ytdlRetries
@@ -853,6 +853,11 @@ func (p *Player) SetSub(id int) {
 	}
 	p.send("set", "sid", v)
 }
+
+// AddChapter jumps by d chapters: 1 the next, -1 the start of the one
+// playing, or the one before within mpv's chapter-seek-threshold of its
+// start. Past the last: the end.
+func (p *Player) AddChapter(d int) { p.send("add", "chapter", strconv.Itoa(d)) }
 
 // SetAudio plays the audio track id, a Status.Audios ID; 0 none.
 func (p *Player) SetAudio(id int) {

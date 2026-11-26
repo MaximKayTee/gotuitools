@@ -35,6 +35,7 @@ func (*Player) SetVolume(float64)                  {}
 func (*Player) SetMute(bool)                       {}
 func (*Player) SetSub(int)                         {}
 func (*Player) SetAudio(int)                       {}
+func (*Player) AddChapter(int)                     {}
 func (*Player) SetSpans([]Span)                    {}
 func (*Player) Command(...string) error            { return ErrNoLibmpv }
 func (*Player) SetProperty(string, string)         {}

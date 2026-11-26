@@ -453,3 +453,58 @@ func TestPicksAudioByLang(t *testing.T) {
 		closeWait(t, p)
 	}
 }
+
+// TestChapters: a file's chapters by start, the one playing, a jump to
+// the next and back; subtitles off with SubOff.
+func TestChapters(t *testing.T) {
+	if err := Available(); err != nil {
+		t.Skip(err)
+	}
+	ff, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	dir := t.TempDir()
+	meta := filepath.Join(dir, "meta.txt")
+	srt := filepath.Join(dir, "en.srt")
+	if err := os.WriteFile(meta, []byte(";FFMETADATA1\n"+
+		"[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=2000\ntitle=Opening\n"+
+		"[CHAPTER]\nTIMEBASE=1/1000\nSTART=2000\nEND=4000\ntitle=Part A\n"+
+		"[CHAPTER]\nTIMEBASE=1/1000\nSTART=4000\nEND=6000\ntitle=Ending\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(srt, []byte("1\n00:00:00,000 --> 00:00:05,000\nHello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "chapters.mkv")
+	cmd := exec.Command(ff, "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=6",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+		"-i", srt, "-i", meta, "-map", "0", "-map", "1", "-map", "2", "-map_chapters", "3",
+		"-pix_fmt", "yuv420p", "-c:s", "srt", "-metadata:s:s:0", "language=eng", "-disposition:s:0", "default", "-y", out)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg: %v %s", err, b)
+	}
+	p, err := New(Source{Path: out}, Options{AudioOutput: "null", Paused: true, SubOff: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeWait(t, p)
+	waitFor(t, "chapters", func() bool { return len(p.Status().Chapters) == 3 && p.Status().Chapter == 0 && len(p.Status().Subs) == 1 })
+	st := p.Status()
+	if st.Chapters[1] != (Chapter{Title: "Part A", Start: 2 * time.Second}) || st.Chapters[2].Title != "Ending" {
+		t.Errorf("chapters %+v", st.Chapters)
+	}
+	if st.Sub != 0 {
+		t.Errorf("SubOff: sub %d", st.Sub)
+	}
+	p.AddChapter(1)
+	waitFor(t, "next chapter", func() bool { return p.Status().Chapter == 1 })
+	if pos := p.Status().Pos; pos < 2*time.Second-100*time.Millisecond || pos > 2*time.Second+500*time.Millisecond {
+		t.Errorf("at %v after the jump", pos)
+	}
+	p.AddChapter(1)
+	waitFor(t, "last chapter", func() bool { return p.Status().Chapter == 2 })
+	p.AddChapter(-1)
+	waitFor(t, "back", func() bool { return p.Status().Chapter == 1 })
+}
