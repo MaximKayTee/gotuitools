@@ -39,7 +39,7 @@ One tab per component: theme, text, input, list, fuzzy, modal, palette and files
 | `palette` | Command palette and any chooser: a modal; keys that act on the highlighted row |
 | `form` | Modal of fields to fill in: text lines and choices, a check before submit |
 | `sliders` | Modal of vertical sliders side by side, bars from a zero line: keys, click, drag, wheel; a switch; each change reported as it is made |
-| `shelf` | Groups of tiles one above another, each a name over a row of tiles that moves sideways: the mark, what is shown, drawn from the program's tiles with their mouse zones |
+| `shelf` | Groups of tiles one above another, each a name over its tiles: a row that moves sideways, or a grid of as many rows as they take (`Wrap`); groups folded to their names; the mark, what is shown, drawn from the program's tiles with their mouse zones |
 | `files` | File or folder chooser on disk: a modal; path line, rows narrowed by typing, new names |
 | `guide` | Quick start: a step to a page with text, keys and a picture or a live view of the program; ticked once its command has run, progress kept in a file; shown on the first start, then on F12 |
 | `help` | Status-bar hints, keys screen, KEYS.md render and check |
