@@ -38,6 +38,7 @@ One tab per component: theme, text, input, list, fuzzy, modal, palette and files
 | `command` | Command registry, key bindings by mode, chords, user rebinding, dispatcher |
 | `palette` | Command palette and any chooser: a modal; keys that act on the highlighted row |
 | `form` | Modal of fields to fill in: text lines and choices, a check before submit |
+| `sliders` | Modal of vertical sliders side by side, bars from a zero line: keys, click, drag, wheel; a switch; each change reported as it is made |
 | `files` | File or folder chooser on disk: a modal; path line, rows narrowed by typing, new names |
 | `guide` | Quick start: a step to a page with text, keys and a picture or a live view of the program; ticked once its command has run, progress kept in a file; shown on the first start, then on F12 |
 | `help` | Status-bar hints, keys screen, KEYS.md render and check |
