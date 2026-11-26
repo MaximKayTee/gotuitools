@@ -154,7 +154,7 @@ func TestStateSubs(t *testing.T) {
 	if !s.apply(list(tracks)) {
 		t.Fatal("no change")
 	}
-	want := []Sub{{ID: 1, Lang: "de"}, {ID: 2, Lang: "en", Auto: true}, {ID: 3}}
+	want := []Sub{{ID: 1, Lang: "de", Title: "German"}, {ID: 2, Lang: "en", Auto: true}, {ID: 3}}
 	if st := s.status(); !slices.Equal(st.Subs, want) || st.Sub != 2 {
 		t.Fatalf("subs %+v sub %d", st.Subs, st.Sub)
 	}
