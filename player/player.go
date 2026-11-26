@@ -28,7 +28,8 @@
 // frame and keeps playing; the next Play shows it again.
 //
 // Tracks: a subtitle or audio track set is looked for in the files
-// after, by language, name and place; subtitles off stay off.
+// after, by language, name and place; subtitles off stay off. Picks and
+// SetPicks keep them past the Pane.
 //
 // State: libmpv's observed position, duration, pause, load and error,
 // cached; volume, mute, loop and speed are the pane's, kept across
@@ -994,6 +995,55 @@ func (p *Pane) SetLangs(audio, sub string) {
 	p.audioPref, p.subPref = audio, sub
 	p.audioPick, p.subPick, p.subOff = pick{}, pick{}, false
 	p.mu.Unlock()
+}
+
+// Pick is a track picked: its language, its name, its place among the
+// tracks of its language, from 0.
+type Pick struct {
+	Lang, Title string
+	Nth         int
+}
+
+// Picks are the tracks SetAudio and SetSub picked, nil none, and
+// subtitles turned off: what the sessions after look for.
+type Picks struct {
+	Audio, Sub *Pick
+	SubOff     bool
+}
+
+// Picks are the tracks picked, to keep past the Pane.
+func (p *Pane) Picks() Picks {
+	if p == nil {
+		return Picks{}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return Picks{Audio: p.audioPick.out(), Sub: p.subPick.out(), SubOff: p.subOff}
+}
+
+// SetPicks sets the tracks picked, as SetAudio and SetSub would, for
+// the sessions after: after SetLangs, which forgets them.
+func (p *Pane) SetPicks(k Picks) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.audioPick, p.subPick, p.subOff = pickIn(k.Audio), pickIn(k.Sub), k.SubOff
+	p.mu.Unlock()
+}
+
+func (k pick) out() *Pick {
+	if !k.ok {
+		return nil
+	}
+	return &Pick{Lang: k.lang, Title: k.title, Nth: k.nth}
+}
+
+func pickIn(k *Pick) pick {
+	if k == nil {
+		return pick{}
+	}
+	return pick{ok: true, lang: k.Lang, title: k.Title, nth: k.Nth}
 }
 
 // Chapters are the open session's chapters, by start. Not to be

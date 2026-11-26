@@ -71,10 +71,27 @@ func TestPicksHeld(t *testing.T) {
 	if got := f.took(); !slices.Equal(got, []string{"audio 2"}) || !f.o.SubOff {
 		t.Fatalf("off: %q, SubOff %v", got, f.o.SubOff)
 	}
+	// kept past the pane: another one, given them, finds the same
+	kept := p.Picks()
+	if kept.Sub != nil || !kept.SubOff || kept.Audio == nil || *kept.Audio != (Pick{Title: "Commentary", Nth: 1}) {
+		t.Fatalf("picks %+v, audio %+v", kept, kept.Audio)
+	}
+	p2, op2, _ := newTest(t, Options{})
+	p2.SetLangs("ja", "en")
+	p2.SetPicks(Picks{Audio: kept.Audio, Sub: &Pick{Lang: "eng", Title: "Dialogue", Nth: 1}})
+	if err := p2.Play(ctx, file("/1.mkv"), 0, 0, 40, 12); err != nil {
+		t.Fatal(err)
+	}
+	f2 := op2.last(t)
+	f2.took()
+	f2.set(func(s *mpv.Status) { s.Loaded, s.Subs, s.Sub, s.Audios, s.Audio = true, subs, 1, audios, 1 })
+	if got := f2.took(); !slices.Equal(got, []string{"sub 2", "audio 2"}) || f2.o.SubLang != "eng,en" || f2.o.SubOff {
+		t.Fatalf("another pane: %q, slang %q, off %v", got, f2.o.SubLang, f2.o.SubOff)
+	}
 	// forgotten with new languages
 	p.SetLangs("", "")
 	f = play("/7.mkv", subs, audios)
-	if got := f.took(); len(got) != 0 {
-		t.Fatalf("after SetLangs: %q", got)
+	if got := f.took(); len(got) != 0 || p.Picks() != (Picks{}) {
+		t.Fatalf("after SetLangs: %q, picks %+v", got, p.Picks())
 	}
 }
