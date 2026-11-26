@@ -169,8 +169,9 @@ type Status struct {
 
 // Sub is a subtitle track.
 type Sub struct {
-	ID   int
-	Lang string // "en", "pt-BR"; "" unknown
+	ID    int
+	Lang  string // "en", "pt-BR"; "" unknown
+	Title string // the track's name: "Signs & Songs"; "" none
 	// Auto: auto-generated captions, Options.AutoCaptions.
 	Auto bool
 }
@@ -604,7 +605,11 @@ func parseTracks(list string) (subs []Sub, sub int, audios []Audio, audio int) {
 		}
 		switch t.Type {
 		case "sub":
-			subs = append(subs, Sub{ID: t.ID, Lang: t.Lang, Auto: t.Title == autoTitle})
+			s := Sub{ID: t.ID, Lang: t.Lang, Title: t.Title}
+			if t.Title == autoTitle {
+				s.Title, s.Auto = "", true
+			}
+			subs = append(subs, s)
 			if t.Selected {
 				sub = t.ID
 			}

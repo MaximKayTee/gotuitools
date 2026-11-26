@@ -272,3 +272,65 @@ func TestLiveYouTube(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 }
+
+// TestLiveTracksHeld: libmpv, a file with two English subtitle tracks
+// and two untagged audio tracks, the second of each picked: they play in
+// the file after, where mpv alone takes the first.
+func TestLiveTracksHeld(t *testing.T) {
+	if err := Available(); err != nil {
+		t.Skip(err)
+	}
+	ff, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	dir := t.TempDir()
+	srt := filepath.Join(dir, "s.srt")
+	if err := os.WriteFile(srt, []byte("1\n00:00:00,000 --> 00:00:05,000\nHello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	clip := func(name string) string {
+		out := filepath.Join(dir, name)
+		cmd := exec.Command(ff, "-hide_banner", "-loglevel", "error",
+			"-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=6",
+			"-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+			"-f", "lavfi", "-i", "sine=frequency=660:duration=6",
+			"-i", srt, "-i", srt, "-map", "0", "-map", "1", "-map", "2", "-map", "3", "-map", "4",
+			"-pix_fmt", "yuv420p", "-c:a", "flac", "-c:s", "srt",
+			"-metadata:s:a:0", "title=Stereo", "-metadata:s:a:1", "title=Commentary",
+			"-metadata:s:s:0", "language=eng", "-metadata:s:s:0", "title=Signs & Songs",
+			"-metadata:s:s:1", "language=eng", "-metadata:s:s:1", "title=Dialogue",
+			"-disposition:a:0", "default", "-disposition:a:1", "0", "-disposition:s:0", "default", "-disposition:s:1", "0", "-y", out)
+		if b, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("ffmpeg: %v %s", err, b)
+		}
+		return out
+	}
+	one, two := clip("1.mkv"), clip("2.mkv")
+	p := New(Options{Output: &frameLog{}, AudioOutput: "null"})
+	defer p.Wait()
+	defer p.Stop()
+	ctx := context.Background()
+	if err := p.Play(ctx, Source{Target: one}, 0, 0, 20, 10); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "tracks", func() bool {
+		st := p.State()
+		return st.Loaded && len(p.Subs()) == 2 && len(p.Audios()) == 2 && st.Audio != 0
+	})
+	if st := p.State(); st.Sub != 1 || st.Audio != 1 || p.Subs()[1] != (Sub{ID: 2, Lang: "eng", Title: "Dialogue"}) {
+		t.Fatalf("mpv's picks: sub %d, audio %d, subs %+v", st.Sub, st.Audio, p.Subs())
+	}
+	if err := p.SetSub(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetAudio(2); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := p.Play(ctx, Source{Target: two}, 0, 0, 20, 10); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the picks", func() bool { st := p.State(); return st.Target == two && st.Sub == 2 && st.Audio == 2 })
+	t.Logf("picks playing %v after Play, at %v of the file", time.Since(start).Round(time.Millisecond), p.State().Pos.Round(time.Millisecond))
+}

@@ -27,6 +27,9 @@
 // plays again from the start on the same handle. Hide deletes the
 // frame and keeps playing; the next Play shows it again.
 //
+// Tracks: a subtitle or audio track set is looked for in the files
+// after, by language, name and place; subtitles off stay off.
+//
 // State: libmpv's observed position, duration, pause, load and error,
 // cached; volume, mute, loop and speed are the pane's, kept across
 // sessions. Controls change State at once; Changes delivers it at most
@@ -219,10 +222,10 @@ type Pane struct {
 	mute    bool
 	loop    bool
 	speed   float64
-	subLang string // language of the subtitles picked; "" none
-	subOff  bool   // subtitles turned off: none in the sessions after
-	// audioLang is the language of the audio track picked; "" none
-	audioLang string
+	subPick pick // the subtitles picked
+	subOff  bool // subtitles turned off: none in the sessions after
+	// audioPick is the audio track picked
+	audioPick pick
 	// audioPref and subPref are SetLangs'
 	audioPref, subPref string
 	// spans are SetSpans', for the session of spanKey
@@ -251,6 +254,8 @@ type session struct {
 	eng   engine
 	done  chan struct{}
 	ended bool
+	// picked: the tracks picked before were looked for in this file's
+	picked bool
 
 	gmu        sync.Mutex
 	cols, rows int
@@ -341,7 +346,7 @@ func (p *Pane) Play(ctx context.Context, src Source, col, row, cols, rows int) e
 		s.sink.wait = p.o.shmWait
 	}
 	vol, mute, loop, speed := p.vol, p.mute, p.loop, p.speed
-	audioLang, subLang, subOff := langs(p.audioLang, p.audioPref), langs(p.subLang, p.subPref), p.subOff
+	audioLang, subLang, subOff := langs(p.audioPick.lang, p.audioPref), langs(p.subPick.lang, p.subPref), p.subOff
 	var spans []Span
 	if p.spanKey == key {
 		spans = p.spans
@@ -567,7 +572,7 @@ func toRGB(dst []byte, img *image.RGBA) []byte {
 }
 
 // changed takes a property change: the end without Loop or an error
-// ends the session.
+// ends the session; a file's tracks, once, set the ones picked before.
 func (p *Pane) changed(s *session) {
 	p.mu.Lock()
 	eng := s.eng
@@ -583,7 +588,21 @@ func (p *Pane) changed(s *session) {
 		s.ended = true
 		close(s.done)
 	}
+	sub, audio := 0, 0
+	if !s.picked && st.Loaded && len(st.Subs)+len(st.Audios) > 0 {
+		s.picked = true
+		if !p.subOff {
+			sub = p.subPick.id(subTracks(st.Subs))
+		}
+		audio = p.audioPick.id(audioTracks(st.Audios))
+	}
 	p.mu.Unlock()
+	if sub != 0 && sub != st.Sub {
+		eng.SetSub(sub)
+	}
+	if audio != 0 && audio != st.Audio {
+		eng.SetAudio(audio)
+	}
 	if end && st.Err != nil {
 		p.o.Logger.Warn("mpv", "target", s.key, "err", st.Err)
 	}
@@ -910,26 +929,24 @@ func (p *Pane) Subs() []Sub {
 	return eng.Status().Subs
 }
 
-// SetSub shows the subtitle track id, a Subs ID; 0 none. Its language
-// is shown in the sessions after too; 0 turns them off for the sessions
-// after, until a track is set or SetLangs. ErrNotPlaying without an
-// open session.
+// SetSub shows the subtitle track id, a Subs ID; 0 none. The sessions
+// after show the track of its language with its name, else the one at
+// its place among that language's, else mpv's pick for the language; 0
+// turns them off for the sessions after, until a track is set or
+// SetLangs. ErrNotPlaying without an open session.
 func (p *Pane) SetSub(id int) error {
 	eng := p.open()
 	if eng == nil {
 		return ErrNotPlaying
 	}
-	lang := ""
+	var k pick
 	if id != 0 {
-		subs := eng.Status().Subs
-		i := slices.IndexFunc(subs, func(s Sub) bool { return s.ID == id })
-		if i < 0 {
+		if k = pickOf(subTracks(eng.Status().Subs), id); !k.ok {
 			return fmt.Errorf("player: no subtitle track %d", id)
 		}
-		lang = subs[i].Lang
 	}
 	p.mu.Lock()
-	p.subLang, p.subOff = lang, id == 0
+	p.subPick, p.subOff = k, id == 0
 	p.mu.Unlock()
 	eng.SetSub(id)
 	p.notify()
@@ -945,20 +962,20 @@ func (p *Pane) Audios() []Audio {
 	return eng.Status().Audios
 }
 
-// SetAudio plays the audio track id, an Audios ID. Its language comes
-// first in the sessions after. ErrNotPlaying without an open session.
+// SetAudio plays the audio track id, an Audios ID. The sessions after
+// play the track SetSub's rule finds. ErrNotPlaying without an open
+// session.
 func (p *Pane) SetAudio(id int) error {
 	eng := p.open()
 	if eng == nil {
 		return ErrNotPlaying
 	}
-	audios := eng.Status().Audios
-	i := slices.IndexFunc(audios, func(a Audio) bool { return a.ID == id })
-	if i < 0 {
+	k := pickOf(audioTracks(eng.Status().Audios), id)
+	if !k.ok {
 		return fmt.Errorf("player: no audio track %d", id)
 	}
 	p.mu.Lock()
-	p.audioLang = audios[i].Lang
+	p.audioPick = k
 	p.mu.Unlock()
 	eng.SetAudio(id)
 	p.notify()
@@ -975,7 +992,7 @@ func (p *Pane) SetLangs(audio, sub string) {
 	}
 	p.mu.Lock()
 	p.audioPref, p.subPref = audio, sub
-	p.audioLang, p.subLang, p.subOff = "", "", false
+	p.audioPick, p.subPick, p.subOff = pick{}, pick{}, false
 	p.mu.Unlock()
 }
 
@@ -999,6 +1016,78 @@ func (p *Pane) AddChapter(d int) error {
 	}
 	eng.AddChapter(d)
 	return nil
+}
+
+// pick is a track picked: its language, its name, its place among the
+// tracks of its language.
+type pick struct {
+	ok          bool
+	lang, title string
+	nth         int
+}
+
+// track is a subtitle or audio track as a pick sees it.
+type track struct {
+	id          int
+	lang, title string
+}
+
+func subTracks(subs []Sub) []track {
+	ts := make([]track, len(subs))
+	for i, s := range subs {
+		ts[i] = track{s.ID, s.Lang, s.Title}
+	}
+	return ts
+}
+
+func audioTracks(audios []Audio) []track {
+	ts := make([]track, len(audios))
+	for i, a := range audios {
+		ts[i] = track{a.ID, a.Lang, a.Title}
+	}
+	return ts
+}
+
+// pickOf is the track id of ts as a pick; not ok without it.
+func pickOf(ts []track, id int) pick {
+	i := slices.IndexFunc(ts, func(t track) bool { return t.id == id })
+	if i < 0 {
+		return pick{}
+	}
+	k := pick{ok: true, lang: ts[i].lang, title: ts[i].title}
+	for _, t := range ts[:i] {
+		if strings.EqualFold(t.lang, k.lang) {
+			k.nth++
+		}
+	}
+	return k
+}
+
+// id is the track of ts the pick names: of its language, the one at
+// its place when it has its name, else the first with its name, else
+// the one at its place; 0 none.
+func (k pick) id(ts []track) int {
+	if !k.ok {
+		return 0
+	}
+	var same []track
+	for _, t := range ts {
+		if strings.EqualFold(t.lang, k.lang) {
+			same = append(same, t)
+		}
+	}
+	if k.nth < len(same) && same[k.nth].title == k.title {
+		return same[k.nth].id
+	}
+	for _, t := range same {
+		if t.title == k.title {
+			return t.id
+		}
+	}
+	if k.nth < len(same) {
+		return same[k.nth].id
+	}
+	return 0
 }
 
 // langs is the language picked, then the ones preferred.
